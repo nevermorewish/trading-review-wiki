@@ -16,6 +16,7 @@ import Papa from "papaparse"
 import { parseTradeMarkdown as parseTradeMarkdownStats } from "@/lib/trade-stats"
 import { useTranslation } from "react-i18next"
 import { normalizePath, getFileName } from "@/lib/path-utils"
+import { appendDailyLog } from "@/lib/wiki-housekeeping"
 
 export function SourcesView() {
   const { t } = useTranslation()
@@ -579,14 +580,12 @@ export function SourcesView() {
         }
       }
 
-      // Step 7: Append deletion record to log.md
+      // Step 7: Append deletion record to the date-partitioned log.
       try {
-        const logPath = `${pp}/wiki/log.md`
-        const logContent = await readFile(logPath).catch(() => "# Wiki Log\n")
         const date = new Date().toISOString().slice(0, 10)
         const keptCount = relatedPages.length - actuallyDeleted.length
-        const logEntry = `\n## [${date}] delete | ${fileName}\n\nDeleted source file and ${actuallyDeleted.length} wiki pages.${keptCount > 0 ? ` ${keptCount} shared pages kept (have other sources).` : ""}\n`
-        await writeFile(logPath, logContent.trimEnd() + logEntry)
+        const logEntry = `## [${date}] delete | ${fileName}\n\nDeleted source file and ${actuallyDeleted.length} wiki pages.${keptCount > 0 ? ` ${keptCount} shared pages kept (have other sources).` : ""}`
+        await appendDailyLog(pp, logEntry)
       } catch {
         // non-critical
       }

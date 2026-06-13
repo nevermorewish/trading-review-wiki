@@ -6,7 +6,8 @@ import { useReviewStore } from "@/stores/review-store"
 import { useChatStore } from "@/stores/chat-store"
 import { useResearchStore } from "@/stores/research-store"
 import { listDirectory, openProject, getClipServerToken } from "@/commands/fs"
-import { getLastProject, getRecentProjects, saveLastProject, loadLlmConfig, loadLanguage, loadSearchApiConfig, loadEmbeddingConfig, loadAppTheme } from "@/lib/project-store"
+import { getLastProject, getRecentProjects, saveLastProject, loadLlmConfig, loadLanguage, loadSearchApiConfig, loadEmbeddingConfig, loadAppTheme, loadPgConfig } from "@/lib/project-store"
+import { syncStockCodes } from "@/commands/stock-codes"
 import { loadReviewItems, loadChatHistory } from "@/lib/persist"
 import { setupAutoSave, teardownAutoSave } from "@/lib/auto-save"
 import { startClipWatcher, stopClipWatcher } from "@/lib/clip-watcher"
@@ -60,6 +61,10 @@ function App() {
         const savedEmbeddingConfig = await loadEmbeddingConfig()
         if (!cancelled && savedEmbeddingConfig) {
           useWikiStore.getState().setEmbeddingConfig(savedEmbeddingConfig)
+        }
+        const savedPgConfig = await loadPgConfig()
+        if (!cancelled && savedPgConfig) {
+          useWikiStore.getState().setPgConfig(savedPgConfig)
         }
         const savedLang = await loadLanguage()
         if (!cancelled && savedLang) {
@@ -115,6 +120,13 @@ function App() {
         console.error("Failed to restore ingest queue:", err)
       )
     })
+    // Background-sync stock codes from PG (24h cache; no-op if config empty)
+    const pgConfig = useWikiStore.getState().pgConfig
+    if (pgConfig.host && pgConfig.user && pgConfig.password && pgConfig.database && pgConfig.port) {
+      syncStockCodes(proj.path, pgConfig, false).catch((err) =>
+        console.warn("[App] Stock code sync failed:", err)
+      )
+    }
     // Notify local clip server of the current project + all recent projects
     getClipServerToken().then((token) => {
       fetch("http://127.0.0.1:19827/project", {

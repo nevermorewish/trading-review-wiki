@@ -1,7 +1,10 @@
 import { readFile, writeFile } from "@/commands/fs"
 import { autoIngest } from "./ingest"
 import { useWikiStore } from "@/stores/wiki-store"
+import { useChatStore } from "@/stores/chat-store"
 import { normalizePath } from "@/lib/path-utils"
+import { makeChatStreamHooks } from "@/lib/ingest-stream-hooks"
+import { getFileName } from "@/lib/path-utils"
 
 // ── Types ─────────────────────────────────────────────────────────────────
 
@@ -276,7 +279,21 @@ async function processNext(projectPath: string): Promise<void> {
   currentTask = taskContext
 
   try {
-    const writtenFiles = await autoIngest(pp, fullSourcePath, llmConfig, taskContext.abortController.signal, next.folderContext)
+    // 批量场景：把每个 stage 的 LLM 输出流到 chat，前缀加 [filename] 区分多文件
+    const fileLabel = `[${getFileName(next.sourcePath)}]`
+    const chat = useChatStore.getState()
+    // 确保有 active conversation 才走流式回显
+    const streamHooks = chat.activeConversationId
+      ? makeChatStreamHooks(fileLabel)
+      : undefined
+    const writtenFiles = await autoIngest(
+      pp,
+      fullSourcePath,
+      llmConfig,
+      taskContext.abortController.signal,
+      next.folderContext,
+      streamHooks ? { stream: streamHooks } : undefined,
+    )
     taskContext.writtenFiles = writtenFiles
 
     // Success: remove from queue

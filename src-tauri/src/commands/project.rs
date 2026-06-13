@@ -23,6 +23,7 @@ pub fn create_project(name: String, path: String) -> Result<WikiProject, String>
         "wiki/queries",
         "wiki/comparisons",
         "wiki/synthesis",
+        "wiki/logs",
     ];
     for dir in &dirs {
         fs::create_dir_all(root.join(dir))
@@ -86,7 +87,7 @@ venue: ""
 
 ## Log Format
 
-`wiki/log.md` records research activity in reverse chronological order:
+    `wiki/logs/log-YYYY-MM-DD.md` records research activity by day; legacy `wiki/log.md` is read-only history:
 ```
 ## YYYY-MM-DD
 
@@ -161,16 +162,16 @@ When sources contradict each other:
 "#;
     write_file_inner(root.join("wiki/index.md"), index_content)?;
 
-    // wiki/log.md
+    // wiki/logs/log-YYYY-MM-DD.md
     let log_content = format!(
-        r#"# Research Log
+        r#"# Wiki Log {today}
 
-## {today}
+## [{today}] project | created
 
 - Project created
 "#
     );
-    write_file_inner(root.join("wiki/log.md"), &log_content)?;
+    write_file_inner(root.join(format!("wiki/logs/log-{}.md", today)), &log_content)?;
 
     // wiki/overview.md
     let overview_content = r#"---

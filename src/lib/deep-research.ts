@@ -220,7 +220,17 @@ export async function saveResearchDraft(
 
   try {
     const date = new Date().toISOString().slice(0, 10)
-    const slug = task.topic.toLowerCase().replace(/[^a-z0-9\s-]/g, "").trim().replace(/\s+/g, "-").slice(0, 50)
+    // T27 校验：拒绝把垃圾 topic 写成 wiki 页
+    const { validatePageTitle, makeSlug, validateSlug } = await import("@/lib/page-name-validator")
+    const titleCheck = validatePageTitle(task.topic)
+    if (!titleCheck.ok) {
+      throw new Error(`Topic 非法: ${titleCheck.reason}`)
+    }
+    const slug = makeSlug(task.topic)
+    const slugCheck = validateSlug(slug)
+    if (!slugCheck.ok) {
+      throw new Error(`生成文件名非法: ${slugCheck.reason}`)
+    }
     const baseFileName = `research-${slug}-${date}.md`
 
     // Ensure unique file name to avoid overwriting existing files

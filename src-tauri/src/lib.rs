@@ -1,5 +1,6 @@
 mod clip_server;
 mod commands;
+mod settings;
 mod types;
 
 #[tauri::command]
@@ -25,6 +26,7 @@ pub fn run() {
             commands::fs::read_file_binary,
             commands::fs::parse_trade_excel,
             commands::fs::write_file,
+            commands::fs::append_file,
             commands::fs::write_binary_file,
             commands::fs::list_directory,
             commands::fs::copy_file,
@@ -43,6 +45,15 @@ pub fn run() {
             commands::vectorstore::vector_search,
             commands::vectorstore::vector_delete,
             commands::vectorstore::vector_count,
+            commands::vectorstore::vector_stats,
+            commands::vectorstore::vector_clear,
+            commands::stock_codes::sync_stock_codes,
+            commands::stock_codes::lookup_stock_code,
+            commands::stock_codes::get_stock_codes_status,
+            commands::migrate::migrate_wiki_backup,
+            commands::normalize_dirs::normalize_wiki_dirs,
+            commands::body_residue::body_residue_backup,
+            commands::cleanup_garbage::cleanup_garbage_backup,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {

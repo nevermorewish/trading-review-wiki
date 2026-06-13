@@ -6,6 +6,17 @@ import { normalizePath } from "@/lib/path-utils"
 
 // ── Embedding API ─────────────────────────────────────────────────────────
 
+export interface VectorStoreStats {
+  db_path: string
+  table_exists: boolean
+  row_count: number
+  db_bytes: number
+  data_bytes: number
+  versions_bytes: number
+  transactions_bytes: number
+  error?: string | null
+}
+
 async function fetchEmbedding(
   text: string,
   embeddingConfig: EmbeddingConfig,
@@ -65,6 +76,18 @@ async function vectorDelete(projectPath: string, pageId: string): Promise<void> 
 
 async function vectorCount(projectPath: string): Promise<number> {
   return await invoke("vector_count", {
+    projectPath: normalizePath(projectPath),
+  })
+}
+
+async function vectorStats(projectPath: string): Promise<VectorStoreStats> {
+  return await invoke("vector_stats", {
+    projectPath: normalizePath(projectPath),
+  })
+}
+
+async function vectorClear(projectPath: string): Promise<void> {
+  await invoke("vector_clear", {
     projectPath: normalizePath(projectPath),
   })
 }
@@ -152,6 +175,23 @@ export async function embedAllPages(
   }
 
   return done
+}
+
+export async function getVectorStoreStats(projectPath: string): Promise<VectorStoreStats> {
+  return vectorStats(projectPath)
+}
+
+export async function clearVectorStore(projectPath: string): Promise<void> {
+  await vectorClear(projectPath)
+}
+
+export async function rebuildAllPageEmbeddings(
+  projectPath: string,
+  embeddingConfig: EmbeddingConfig,
+  onProgress?: (done: number, total: number) => void,
+): Promise<number> {
+  await clearVectorStore(projectPath)
+  return embedAllPages(projectPath, embeddingConfig, onProgress)
 }
 
 /**

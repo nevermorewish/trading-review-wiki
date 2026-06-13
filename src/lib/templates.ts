@@ -50,7 +50,7 @@ const BASE_INDEX_FORMAT = `\`wiki/index.md\` lists all pages grouped by type. Ea
 - [[page-slug]] — one-line description
 \`\`\``
 
-const BASE_LOG_FORMAT = `\`wiki/log.md\` records activity in reverse chronological order:
+const BASE_LOG_FORMAT = `\`wiki/logs/log-YYYY-MM-DD.md\` records activity by day; legacy \`wiki/log.md\` is read-only history:
 \`\`\`
 ## YYYY-MM-DD
 
@@ -91,14 +91,15 @@ const researchTemplate: WikiTemplate = {
 
 角色分工：
 - **你（人类）**：负责提供原始素材（交割单、截图、当日感悟、新闻），提出好问题，做最终决策。
-- **LLM**：负责归纳、分类、更新关联页面、发现矛盾、维护一致性。所有机械性的维护工作由 LLM 完成。
+- **LLM**：负责归纳、分类、更新正式知识页、发现矛盾、维护一致性。
+- **程序化维护层**：负责 index.md、overview.md 与 \`wiki/logs/log-YYYY-MM-DD.md\` 的追加、合并和去重。
 
 ---
 
 ## 三层架构
 
 ### 1. Raw Sources（原始资料）\`raw/\`
-原始资料是不可变的。你只负责往里面放东西，LLM 只读取、绝不修改。
+原始资料是不可变的。你只负责往里面放东西，LLM 和程序只读取，绝不修改、删除、压缩或重写 raw/**。
 
 \`\`\`
 raw/
@@ -115,19 +116,19 @@ raw/
 - 研报新闻：\`YYYY-MM-DD-[来源]-[标题].md\`
 
 ### 2. Wiki（知识库）\`wiki/\`
-LLM 全权负责撰写和维护的 Markdown 文件。
+正式知识页由 LLM 撰写和维护；index、overview 与 daily logs 由程序化 housekeeping 合并维护。
 
 \`\`\`
 wiki/
   index.md              # 内容目录，每次 Ingest 后更新
-  log.md                # 按时间顺序记录所有 Ingest / Query / Lint 操作
+  logs/
+    log-YYYY-MM-DD.md # 按日期记录 Ingest / Query / Lint 操作
   策略/                  # 交易策略、买卖点规则、仓位管理原则
   股票/                  # 个股档案，记录你对某只股票的所有交易和理解
   模式/                  # 市场模式、题材生命周期、资金套路
   错误/                  # 错误类型、典型案例、教训总结
   市场环境/              # 不同阶段的市场特征（情绪周期、指数环境）
   进化/                  # 交易能力进化史，里程碑、关键顿悟
-  预测/                  # 交易预测、明日计划、机会预判
 \`\`\`
 
 **每页必须包含 YAML frontmatter**：
@@ -136,7 +137,7 @@ wiki/
 title: 页面标题
 created: YYYY-MM-DD
 updated: YYYY-MM-DD
-type: [策略|股票|模式|错误|市场环境|进化|总结|预测]
+type: [策略|股票|模式|错误|市场环境|进化|总结]
 sources: 0      # 关联的原始资料数量
 status: [活跃|归档|迭代中]
 ---
@@ -145,6 +146,7 @@ status: [活跃|归档|迭代中]
 **交叉引用约定**：
 - 使用 \`[[页面标题]]\` 语法链接到其他 wiki 页面。
 - 每页底部添加 \`## 相关页面\` 章节，列出 3-10 个最相关的内部链接。
+- 内容页正文（不含 frontmatter）软上限为 2000 行；超过时应精简、拆分或把历史明细归档到总结/源文档页。
 
 ### 3. Schema（本文件）\`AGENTS.md\`
 定义结构、约定、流程。随着你的需求变化，可以一起修改本文件。
@@ -177,8 +179,8 @@ status: [活跃|归档|迭代中]
 4. 在 \`wiki/错误/\` 下，如果复盘提到了失误，更新错误类型手册或创建新的错误子页面。
 5. 在 \`wiki/市场环境/\` 下，如果复盘描述了当日市场情绪、指数走势，更新对应的市场阶段页面。
 6. 在 \`wiki/模式/\` 下，如果提到了某种市场模式（如冰点反弹、龙头分歧），更新模式库。
-7. 更新 \`wiki/log.md\`，添加一条 Ingest 记录。
-8. 更新 \`wiki/index.md\` 中的统计信息。
+7. 程序化追加 \`wiki/logs/log-YYYY-MM-DD.md\`，不写 legacy \`wiki/log.md\`。
+8. 程序化合并 \`wiki/index.md\` 与 \`wiki/overview.md\`，只追加/去重，不让 LLM 整页重写。
 
 **B. 截图/交割单 Ingest**：
 - 提取时间、股票、买卖点、价格、理由。
@@ -209,11 +211,12 @@ status: [活跃|归档|迭代中]
 
 **Query 流程**：
 1. LLM 先读取 \`wiki/index.md\`，定位相关页面。
-2. **系统同时检索 \`wiki/\` 和 \`raw/\` 目录下的所有文本文件**，按以下规则排序：
+2. **系统以 Ask Retrieval 模式检索 \`wiki/\`、\`raw/\`、frontmatter 图谱等来源**，按以下规则排序：
    - **token 匹配分**：标题匹配 > 内容匹配
-   - **RAW_BONUS**：\`raw/\` 下的原始资料（交割单、日复盘、研报新闻）额外 +4 分，避免被 wiki 页面埋没
+   - **结构字段优先**：\`title/aliases/tags/related/sources/wikilinks\` 是一等召回字段
+   - **RAW_BONUS**：\`raw/\` 原始资料若与正式 wiki \`sources\` 对齐，可获得额外召回权重
    - **Recency Boost**：文件名包含 \`YYYY-MM-DD\` 的资料，按日期近远加分（≤7天 +6，≤30天 +3，≤90天 +1）
-   - **Query-aware 时间范围 boost**：如果用户明确提到"最近一个月"、"本周"、"昨天"等，**该范围内的 raw 文件额外 +15 分**，确保旧文件被自然挤出
+   - **Query-aware 时间范围 boost**：如果用户明确提到"最近一个月"、"本周"、"昨天"等，**该范围内的 raw 文件额外 +15 分**，这是问答检索的降噪策略；摄入候选检索不得用它压低老页面或 raw 线索
 3. 取排序后的前 20 个结果竞争上下文 budget，高分者优先进入 system prompt。
 4. 对于命中页面，进行 Graph 1-level expansion（展开关联页面）。
 5. 综合分析后回答，必须标注引用来源（\`[[页面名]]\` 或 \`[1]、[2]\` 页码）。
@@ -258,7 +261,7 @@ Lint 时，LLM 执行以下检查：
 - 总结本次 Lint 的关键发现，在 \`wiki/进化/交易进化史.md\` 中追加一条记录。
 
 #### 7. 记录 Lint 日志
-- 在 \`wiki/log.md\` 中追加 Lint 记录。
+- 在 \`wiki/logs/log-YYYY-MM-DD.md\` 中追加 Lint 记录。
 
 ---
 
@@ -279,8 +282,8 @@ Lint 时，LLM 执行以下检查：
 - ## 市场环境
 - ## 近期更新
 
-### \`wiki/log.md\`
-按时间倒序排列，每条条目格式：
+### \`wiki/logs/log-YYYY-MM-DD.md\`
+按日期分片追加；legacy \`wiki/log.md\` 只读保留。每条条目格式：
 \`\`\`markdown
 ## [YYYY-MM-DD] ingest | 2026-04-14 复盘
 - 更新了 [[某股]]、[[追高策略]]
@@ -429,7 +432,7 @@ sources: 0
 ## 工作流程速查
 
 \`\`\`
-收盘后 → 写日复盘 → 放入 raw/日复盘/ → 对 LLM 说"摄入今日复盘" → LLM 更新 Wiki
+收盘后 → 写日复盘 → 放入 raw/日复盘/ → 对 LLM 说"摄入今日复盘" → LLM 更新正式知识页，程序化维护 index/overview/daily log
        ↓
 周末 → 对 LLM 说"执行周度 Lint" → LLM 检查矛盾、提炼模式、更新进化史
        ↓
@@ -1007,7 +1010,7 @@ const tradingTemplate: WikiTemplate = {
   name: "交易复盘",
   description: "专为股票交易者设计的复盘系统，沉淀策略、模式与进化",
   icon: "📈",
-  extraDirs: ["raw/日复盘", "raw/交割单", "raw/截图", "raw/研报新闻", "wiki/策略", "wiki/股票", "wiki/模式", "wiki/错误", "wiki/市场环境", "wiki/进化", "wiki/预测"],
+  extraDirs: ["raw/日复盘", "raw/交割单", "raw/截图", "raw/研报新闻", "wiki/策略", "wiki/股票", "wiki/模式", "wiki/错误", "wiki/市场环境", "wiki/进化"],
   files: {
     "raw/日复盘/日复盘模板.md": DAILY_REVIEW_TEMPLATE,
     "wiki/index.md": `---
@@ -1353,14 +1356,15 @@ schema: `# 炒股复盘系统 —— AGENTS.md
 
 角色分工：
 - **你（人类）**：负责提供原始素材（交割单、截图、当日感悟、新闻），提出好问题，做最终决策。
-- **LLM**：负责归纳、分类、更新关联页面、发现矛盾、维护一致性。所有机械性的维护工作由 LLM 完成。
+- **LLM**：负责归纳、分类、更新正式知识页、发现矛盾、维护一致性。
+- **程序化维护层**：负责 index.md、overview.md 与 \`wiki/logs/log-YYYY-MM-DD.md\` 的追加、合并和去重。
 
 ---
 
 ## 三层架构
 
 ### 1. Raw Sources（原始资料）\`raw/\`
-原始资料是不可变的。你只负责往里面放东西，LLM 只读取、绝不修改。
+原始资料是不可变的。你只负责往里面放东西，LLM 和程序只读取，绝不修改、删除、压缩或重写 raw/**。
 
 \`\`\`
 raw/
@@ -1377,19 +1381,19 @@ raw/
 - 研报新闻：\`YYYY-MM-DD-[来源]-[标题].md\`
 
 ### 2. Wiki（知识库）\`wiki/\`
-LLM 全权负责撰写和维护的 Markdown 文件。
+正式知识页由 LLM 撰写和维护；index、overview 与 daily logs 由程序化 housekeeping 合并维护。
 
 \`\`\`
 wiki/
   index.md              # 内容目录，每次 Ingest 后更新
-  log.md                # 按时间顺序记录所有 Ingest / Query / Lint 操作
+  logs/
+    log-YYYY-MM-DD.md # 按日期记录 Ingest / Query / Lint 操作
   策略/                  # 交易策略、买卖点规则、仓位管理原则
   股票/                  # 个股档案，记录你对某只股票的所有交易和理解
   模式/                  # 市场模式、题材生命周期、资金套路
   错误/                  # 错误类型、典型案例、教训总结
   市场环境/              # 不同阶段的市场特征（情绪周期、指数环境）
   进化/                  # 交易能力进化史，里程碑、关键顿悟
-  预测/                  # 交易预测、明日计划、机会预判
 \`\`\`
 
 **每页必须包含 YAML frontmatter**：
@@ -1398,7 +1402,7 @@ wiki/
 title: 页面标题
 created: YYYY-MM-DD
 updated: YYYY-MM-DD
-type: [策略|股票|模式|错误|市场环境|进化|总结|预测]
+type: [策略|股票|模式|错误|市场环境|进化|总结]
 sources: 0      # 关联的原始资料数量
 status: [活跃|归档|迭代中]
 ---
@@ -1407,6 +1411,7 @@ status: [活跃|归档|迭代中]
 **交叉引用约定**：
 - 使用 \`[[页面标题]]\` 语法链接到其他 wiki 页面。
 - 每页底部添加 \`## 相关页面\` 章节，列出 3-10 个最相关的内部链接。
+- 内容页正文（不含 frontmatter）软上限为 2000 行；超过时应精简、拆分或把历史明细归档到总结/源文档页。
 
 ### 3. Schema（本文件）\`AGENTS.md\`
 定义结构、约定、流程。随着你的需求变化，可以一起修改本文件。
@@ -1439,8 +1444,8 @@ status: [活跃|归档|迭代中]
 4. 在 \`wiki/错误/\` 下，如果复盘提到了失误，更新错误类型手册或创建新的错误子页面。
 5. 在 \`wiki/市场环境/\` 下，如果复盘描述了当日市场情绪、指数走势，更新对应的市场阶段页面。
 6. 在 \`wiki/模式/\` 下，如果提到了某种市场模式（如冰点反弹、龙头分歧），更新模式库。
-7. 更新 \`wiki/log.md\`，添加一条 Ingest 记录。
-8. 更新 \`wiki/index.md\` 中的统计信息。
+7. 程序化追加 \`wiki/logs/log-YYYY-MM-DD.md\`，不写 legacy \`wiki/log.md\`。
+8. 程序化合并 \`wiki/index.md\` 与 \`wiki/overview.md\`，只追加/去重，不让 LLM 整页重写。
 
 **B. 截图/交割单 Ingest**：
 - 提取时间、股票、买卖点、价格、理由。
@@ -1471,11 +1476,12 @@ status: [活跃|归档|迭代中]
 
 **Query 流程**：
 1. LLM 先读取 \`wiki/index.md\`，定位相关页面。
-2. **系统同时检索 \`wiki/\` 和 \`raw/\` 目录下的所有文本文件**，按以下规则排序：
+2. **系统以 Ask Retrieval 模式检索 \`wiki/\`、\`raw/\`、frontmatter 图谱等来源**，按以下规则排序：
    - **token 匹配分**：标题匹配 > 内容匹配
-   - **RAW_BONUS**：\`raw/\` 下的原始资料（交割单、日复盘、研报新闻）额外 +4 分，避免被 wiki 页面埋没
+   - **结构字段优先**：\`title/aliases/tags/related/sources/wikilinks\` 是一等召回字段
+   - **RAW_BONUS**：\`raw/\` 原始资料若与正式 wiki \`sources\` 对齐，可获得额外召回权重
    - **Recency Boost**：文件名包含 \`YYYY-MM-DD\` 的资料，按日期近远加分（≤7天 +6，≤30天 +3，≤90天 +1）
-   - **Query-aware 时间范围 boost**：如果用户明确提到"最近一个月"、"本周"、"昨天"等，**该范围内的 raw 文件额外 +15 分**，确保旧文件被自然挤出
+   - **Query-aware 时间范围 boost**：如果用户明确提到"最近一个月"、"本周"、"昨天"等，**该范围内的 raw 文件额外 +15 分**，这是问答检索的降噪策略；摄入候选检索不得用它压低老页面或 raw 线索
 3. 取排序后的前 20 个结果竞争上下文 budget，高分者优先进入 system prompt。
 4. 对于命中页面，进行 Graph 1-level expansion（展开关联页面）。
 5. 综合分析后回答，必须标注引用来源（\`[[页面名]]\` 或 \`[1]、[2]\` 页码）。
@@ -1520,7 +1526,7 @@ Lint 时，LLM 执行以下检查：
 - 总结本次 Lint 的关键发现，在 \`wiki/进化/交易进化史.md\` 中追加一条记录。
 
 #### 7. 记录 Lint 日志
-- 在 \`wiki/log.md\` 中追加 Lint 记录。
+- 在 \`wiki/logs/log-YYYY-MM-DD.md\` 中追加 Lint 记录。
 
 ---
 
@@ -1541,8 +1547,8 @@ Lint 时，LLM 执行以下检查：
 - ## 市场环境
 - ## 近期更新
 
-### \`wiki/log.md\`
-按时间倒序排列，每条条目格式：
+### \`wiki/logs/log-YYYY-MM-DD.md\`
+按日期分片追加；legacy \`wiki/log.md\` 只读保留。每条条目格式：
 \`\`\`markdown
 ## [YYYY-MM-DD] ingest | 2026-04-14 复盘
 - 更新了 [[某股]]、[[追高策略]]
@@ -1691,7 +1697,7 @@ sources: 0
 ## 工作流程速查
 
 \`\`\`
-收盘后 → 写日复盘 → 放入 raw/日复盘/ → 对 LLM 说"摄入今日复盘" → LLM 更新 Wiki
+收盘后 → 写日复盘 → 放入 raw/日复盘/ → 对 LLM 说"摄入今日复盘" → LLM 更新正式知识页，程序化维护 index/overview/daily log
        ↓
 周末 → 对 LLM 说"执行周度 Lint" → LLM 检查矛盾、提炼模式、更新进化史
        ↓

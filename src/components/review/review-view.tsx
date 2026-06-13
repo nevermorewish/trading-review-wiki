@@ -16,6 +16,7 @@ import { useReviewStore, type ReviewItem } from "@/stores/review-store"
 import { useWikiStore } from "@/stores/wiki-store"
 import { writeFile, readFile, listDirectory, deleteFile } from "@/commands/fs"
 import { normalizePath } from "@/lib/path-utils"
+import { appendDailyLog } from "@/lib/wiki-housekeeping"
 
 const typeConfig: Record<ReviewItem["type"], { icon: typeof AlertTriangle; label: string; color: string }> = {
   contradiction: { icon: AlertTriangle, label: "观点矛盾", color: "text-amber-500" },
@@ -103,11 +104,7 @@ export function ReviewView() {
         }
         await writeFile(indexPath, indexContent)
 
-        // Append log
-        const logPath = `${pp}/wiki/log.md`
-        let logContent = ""
-        try { logContent = await readFile(logPath) } catch { logContent = "# Wiki Log\n" }
-        await writeFile(logPath, logContent.trimEnd() + `\n- ${date}: Saved query page \`${fileName}\`\n`)
+        await appendDailyLog(pp, `- ${date}: Saved query page \`${fileName}\``)
 
         // Refresh tree
         const tree = await listDirectory(pp)
@@ -203,10 +200,7 @@ export function ReviewView() {
             indexContent = indexContent.trimEnd() + `\n\n${sectionHeader}\n${entry}\n`
           }
           await writeFile(indexPath, indexContent)
-          const logPath = `${pp}/wiki/log.md`
-          let logContent = ""
-          try { logContent = await readFile(logPath) } catch { logContent = "# Wiki Log\n" }
-          await writeFile(logPath, logContent.trimEnd() + `\n- ${date}: Created ${pageType} page \`${fileName}\` from review\n`)
+          await appendDailyLog(pp, `- ${date}: Created ${pageType} page \`${fileName}\` from review`)
           const tree = await listDirectory(pp)
           setFileTree(tree)
           useWikiStore.getState().bumpDataVersion()
@@ -250,11 +244,7 @@ export function ReviewView() {
           }
           await writeFile(indexPath, indexContent)
 
-          // Log
-          const logPath = `${pp}/wiki/log.md`
-          let logContent = ""
-          try { logContent = await readFile(logPath) } catch { logContent = "# Wiki Log\n" }
-          await writeFile(logPath, logContent.trimEnd() + `\n- ${date}: Created ${pageType} page \`${fileName}\` from review\n`)
+          await appendDailyLog(pp, `- ${date}: Created ${pageType} page \`${fileName}\` from review`)
 
           // Refresh
           const tree = await listDirectory(pp)

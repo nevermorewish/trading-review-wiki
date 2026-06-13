@@ -3,18 +3,84 @@ import { streamChat } from "@/lib/llm-client"
 import type { LlmConfig } from "@/stores/wiki-store"
 import { useWikiStore } from "@/stores/wiki-store"
 import { useChatStore } from "@/stores/chat-store"
-import { useActivityStore } from "@/stores/activity-store"
+import { useActivityStore, type PlanItem } from "@/stores/activity-store"
 import { useReviewStore, type ReviewItem } from "@/stores/review-store"
 import { getFileName, normalizePath } from "@/lib/path-utils"
 import { checkIngestCache, saveIngestCache } from "@/lib/ingest-cache"
-
-const FILE_BLOCK_REGEX = /---FILE:\s*([^\n-]+?)\s*---\n([\s\S]*?)---END FILE---/g
+import { debugLog } from "@/lib/debug-log"
+import { withRetry } from "@/lib/retry"
+import {
+  loadCheckpoint,
+  saveCheckpoint,
+  deleteCheckpoint,
+  sha256Hex,
+  type IngestCheckpoint,
+} from "@/lib/ingest-checkpoint"
+import {
+  WIKI_TYPES,
+  WIKI_STATUS,
+  CONFIDENCE,
+  SCHEMA_VERSION,
+  canonicalSampleFor,
+  cleanSources,
+  normalizeTypeAlias,
+  inferTypeFromPath,
+  nowLocalTimestamp,
+  parseFrontmatter,
+  serializeFrontmatter,
+  validate,
+  type WikiType,
+  type WikiFrontmatter,
+  type SchemaViolation,
+} from "@/lib/schema"
+import { lookupStockCode } from "@/commands/stock-codes"
+import { appendDailyLog, dailyLogPath, localDateString, mergeIndexEntries, type IndexEntryInput } from "@/lib/wiki-housekeeping"
 
 export const LANGUAGE_RULE = "## Language Rule\n- ALWAYS match the language of the source document. If the source is in Chinese, write in Chinese. If in English, write in English. Wiki page titles, content, and descriptions should all be in the same language as the source material."
 
+interface PlanCreateItem {
+  path: string
+  type: string
+  title: string
+  why?: string
+}
+
+interface PlanUpdateItem {
+  path: string
+  why?: string
+}
+
+interface Plan {
+  create: PlanCreateItem[]
+  update: PlanUpdateItem[]
+}
+
+const RESERVED_PATHS = new Set(["wiki/index.md", "wiki/overview.md", "wiki/log.md"])
+
+export type IngestStageLabel = "analyze" | "plan" | "update" | "create"
+
+export interface IngestStreamHooks {
+  /** 每个 stage 开始前调用，便于上层在 chat 起新消息 */
+  onStageStart?: (stage: IngestStageLabel, label: string) => void
+  /** LLM 流式输出的每个 token */
+  onStageToken?: (token: string, stage: IngestStageLabel) => void
+  /** 每个 stage 结束后调用，完整文本传回 */
+  onStageEnd?: (stage: IngestStageLabel, fullText: string) => void
+}
+
+export interface AutoIngestOptions {
+  /** 已有的分析文本（如来自 Stage 0 chat 对话）→ 跳过 Stage 1，直接进 Stage 2 */
+  preAnalysis?: string
+  /** 流式回显 hooks */
+  stream?: IngestStreamHooks
+}
+
 /**
- * Auto-ingest: reads source → LLM analyzes → LLM writes wiki pages, all in one go.
- * Used when importing new files.
+ * Auto-ingest: 4-stage agent loop.
+ *   1. Analyze source        → structured analysis text (可被 preAnalysis 跳过)
+ *   2. Plan changes          → JSON plan listing exact creates/updates
+ *   3. Update existing pages → one LLM call per page, merge-safe
+ *   4. Create new pages      → batch call generates new pages + programmatic index/overview/log
  */
 export async function autoIngest(
   projectPath: string,
@@ -22,11 +88,17 @@ export async function autoIngest(
   llmConfig: LlmConfig,
   signal?: AbortSignal,
   folderContext?: string,
+  options?: AutoIngestOptions,
 ): Promise<string[]> {
+  const preAnalysis = options?.preAnalysis
+  const stream = options?.stream
   const pp = normalizePath(projectPath)
   const sp = normalizePath(sourcePath)
   const activity = useActivityStore.getState()
   const fileName = getFileName(sp)
+  const sourceBaseName = fileName.replace(/\.[^.]+$/, "")
+  const runDate = new Date()
+  const dailyLogRelativePath = dailyLogPath(runDate)
   const activityId = activity.addItem({
     type: "ingest",
     title: fileName,
@@ -34,6 +106,12 @@ export async function autoIngest(
     detail: "Reading source...",
     filesWritten: [],
   })
+  activity.setStages(activityId, [
+    { step: 1, label: "分析源文档", status: "pending" },
+    { step: 2, label: "规划变更", status: "pending" },
+    { step: 3, label: "更新已有页面", status: "pending" },
+    { step: 4, label: "新建页面 + 索引/概览/日志", status: "pending" },
+  ])
 
   const [sourceContent, schema, purpose, index, overview] = await Promise.all([
     tryReadFile(sp),
@@ -43,19 +121,15 @@ export async function autoIngest(
     tryReadFile(`${pp}/wiki/overview.md`),
   ])
 
-  // Detect wiki subdirectories so the generation prompt can route pages correctly
-  // (e.g. trading projects use wiki/股票/ instead of wiki/entities/)
   let wikiDirs: string[] = []
   try {
     const wikiTree = await listDirectory(`${pp}/wiki`)
-    wikiDirs = wikiTree
-      .filter((n) => n.is_dir)
-      .map((n) => `wiki/${n.name}/`)
+    wikiDirs = wikiTree.filter((n) => n.is_dir).map((n) => `wiki/${n.name}/`)
   } catch {
     // ignore
   }
 
-  // ── Cache check: skip re-ingest if source content hasn't changed ──
+  // Cache check: skip re-ingest if source content hasn't changed
   const cachedFiles = await checkIngestCache(pp, fileName, sourceContent)
   if (cachedFiles !== null) {
     activity.updateItem(activityId, {
@@ -66,96 +140,403 @@ export async function autoIngest(
     return cachedFiles
   }
 
+  // Compute content hash for checkpoint
+  const contentHash = await sha256Hex(sourceContent)
+  const existingCheckpoint = await loadCheckpoint(pp, contentHash)
+  const checkpoint: IngestCheckpoint = existingCheckpoint ?? {
+    sourceFileName: fileName,
+    hash: contentHash,
+    timestamp: Date.now(),
+  }
+  const isResume = existingCheckpoint !== null
+
   const truncatedContent = sourceContent.length > 100000
     ? sourceContent.slice(0, 100000) + "\n\n[...truncated...]"
     : sourceContent
 
-  // ── Step 1: Analysis ──────────────────────────────────────────
-  // LLM reads the source and produces a structured analysis:
-  // key entities, concepts, main arguments, connections to existing wiki, contradictions
-  activity.updateItem(activityId, { detail: "Step 1/2: Analyzing source..." })
-
-  let analysis = ""
-
-  await streamChat(
-    llmConfig,
-    [
-      { role: "system", content: buildAnalysisPrompt(purpose, index) },
-      { role: "user", content: `Analyze this source document:\n\n**File:** ${fileName}${folderContext ? `\n**Folder context:** ${folderContext}` : ""}\n\n---\n\n${truncatedContent}` },
-    ],
-    {
-      onToken: (token) => { analysis += token },
-      onDone: () => {},
-      onError: (err) => {
-        activity.updateItem(activityId, { status: "error", detail: `Analysis failed: ${err.message}` })
-      },
-    },
+  // Retry-wrapped stream invocation with status surfaced to UI
+  const retryOpts = (stepLabel: string) => ({
+    maxAttempts: 3,
+    backoffMs: [3000, 8000],
     signal,
-  )
-
-  if (useActivityStore.getState().items.find((i) => i.id === activityId)?.status === "error") {
-    return []
-  }
-
-  // ── Step 2: Generation ────────────────────────────────────────
-  // LLM takes its own analysis and generates wiki files + review items
-  activity.updateItem(activityId, { detail: "Step 2/2: Generating wiki pages..." })
-
-  let generation = ""
-
-  await streamChat(
-    llmConfig,
-    [
-      { role: "system", content: buildGenerationPrompt(schema, purpose, index, fileName, overview, wikiDirs) },
-      {
-        role: "user",
-        content: [
-          `Based on the following analysis of **${fileName}**, generate the wiki files.`,
-          "",
-          "## Source Analysis",
-          "",
-          analysis,
-          "",
-          "## Original Source Content",
-          "",
-          truncatedContent,
-        ].join("\n"),
-      },
-    ],
-    {
-      onToken: (token) => { generation += token },
-      onDone: () => {},
-      onError: (err) => {
-        activity.updateItem(activityId, { status: "error", detail: `Generation failed: ${err.message}` })
-      },
+    onRetry: (err: Error, attempt: number, nextDelayMs: number) => {
+      debugLog("warn", "ingest-retry", `${stepLabel} attempt ${attempt} failed, retrying in ${nextDelayMs}ms`, {
+        error: err.message,
+      })
+      activity.updateItem(activityId, {
+        detail: `${stepLabel} — 网络错误，${Math.round(nextDelayMs / 1000)}s 后重试（第 ${attempt + 1}/3 次）`,
+      })
     },
-    signal,
-  )
+  })
 
-  if (useActivityStore.getState().items.find((i) => i.id === activityId)?.status === "error") {
-    return []
+  // ── Stage 1: Analyze ───────────────────────────────────────
+  let analysis: string
+  if (preAnalysis) {
+    // 调用方已提供分析（如 Stage 0 chat 对话）→ 直接复用，跳过 LLM 调用
+    activity.updateStage(activityId, 1, { status: "done" })
+    activity.updateItem(activityId, { detail: "Step 1/4: Reusing analysis from chat (Stage 0)" })
+    analysis = preAnalysis
+    checkpoint.analysis = analysis
+    await saveCheckpoint(pp, contentHash, checkpoint)
+  } else if (checkpoint.analysis) {
+    activity.updateStage(activityId, 1, { status: "done" })
+    activity.updateItem(activityId, { detail: "Step 1/4: Reusing cached analysis (resumed)" })
+    analysis = checkpoint.analysis
+  } else {
+    activity.updateStage(activityId, 1, { status: "running" })
+    activity.updateItem(activityId, {
+      detail: isResume ? "Step 1/4: Analyzing source... (resumed)" : "Step 1/4: Analyzing source...",
+    })
+    stream?.onStageStart?.("analyze", "Step 1/4: 分析源文档")
+    try {
+      analysis = await withRetry(
+        () =>
+          runAnalysisStage(
+            llmConfig,
+            fileName,
+            truncatedContent,
+            purpose,
+            index,
+            folderContext,
+            signal,
+            (token) => stream?.onStageToken?.(token, "analyze"),
+          ),
+        retryOpts("Step 1/4: Analyzing"),
+      )
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      activity.updateStage(activityId, 1, { status: "error", error: msg })
+      activity.updateItem(activityId, { status: "error", detail: `Analysis failed: ${msg}` })
+      return []
+    }
+    if (signal?.aborted) {
+      activity.updateStage(activityId, 1, { status: "error", error: "Cancelled" })
+      activity.updateItem(activityId, { status: "error", detail: "Cancelled" })
+      return []
+    }
+    stream?.onStageEnd?.("analyze", analysis)
+    checkpoint.analysis = analysis
+    await saveCheckpoint(pp, contentHash, checkpoint)
+    activity.updateStage(activityId, 1, { status: "done" })
   }
 
-  // ── Step 3: Write files ───────────────────────────────────────
-  activity.updateItem(activityId, { detail: "Writing files..." })
-  let writtenPaths: string[] = []
-  try {
-    writtenPaths = await writeFileBlocks(pp, generation)
-  } catch (err) {
-    console.error("Failed to write wiki files:", err)
-    activity.updateItem(activityId, { status: "error", detail: `Write failed: ${err instanceof Error ? err.message : String(err)}` })
-    return []
+  // ── Stage 2: Plan ──────────────────────────────────────────
+  let plan: Plan
+  if (checkpoint.plan) {
+    activity.updateStage(activityId, 2, { status: "done" })
+    activity.updateItem(activityId, { detail: "Step 2/4: Reusing cached plan (resumed)" })
+    plan = checkpoint.plan
+  } else {
+    activity.updateStage(activityId, 2, { status: "running" })
+    activity.updateItem(activityId, { detail: "Step 2/4: Planning changes..." })
+    stream?.onStageStart?.("plan", "Step 2/4: 规划变更")
+    let planRaw = ""
+    try {
+      plan = await withRetry(
+        () =>
+          runPlanStage(
+            llmConfig,
+            fileName,
+            sourceBaseName,
+            analysis,
+            schema,
+            index,
+            wikiDirs,
+            signal,
+            (token) => {
+              planRaw += token
+              stream?.onStageToken?.(token, "plan")
+            },
+          ),
+        retryOpts("Step 2/4: Planning"),
+      )
+      plan = await normalizePlan(pp, plan)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      activity.updateStage(activityId, 2, { status: "error", error: msg })
+      activity.updateItem(activityId, { status: "error", detail: `Plan stage failed: ${msg}` })
+      return []
+    }
+    if (signal?.aborted) {
+      activity.updateStage(activityId, 2, { status: "error", error: "Cancelled" })
+      activity.updateItem(activityId, { status: "error", detail: "Cancelled" })
+      return []
+    }
+    stream?.onStageEnd?.("plan", planRaw)
+    checkpoint.plan = plan
+    await saveCheckpoint(pp, contentHash, checkpoint)
+    activity.updateStage(activityId, 2, { status: "done" })
   }
 
-  // Ensure source summary page exists (LLM may not have generated it correctly)
-  const sourceBaseName = fileName.replace(/\.[^.]+$/, "")
+  // Materialize plan into store so the UI can render per-page sub-rows
+  // Pre-mark items already completed in a prior run (from checkpoint)
+  const completedUpdates = new Set(checkpoint.completedUpdates ?? [])
+  const stage4DoneAlready = checkpoint.stage4Done === true
+  const stage4Written = new Set((checkpoint.stage4Written ?? []).map((p) => p === "wiki/log.md" ? dailyLogRelativePath : p))
+  // Housekeeping items: always part of stage 4
+  const HOUSEKEEPING_PATHS = ["wiki/index.md", "wiki/overview.md", dailyLogRelativePath]
+  const housekeepingAction = (path: string): "update" | "append" =>
+    path.startsWith("wiki/logs/") ? "append" : "update"
+  const planItems: PlanItem[] = [
+    ...plan.update.map((u, i): PlanItem => ({
+      id: `u-${i}`,
+      action: "update",
+      path: u.path,
+      why: u.why,
+      status: completedUpdates.has(u.path) ? "done" : "pending",
+      stage: 3,
+    })),
+    ...plan.create.map((c, i): PlanItem => ({
+      id: `c-${i}`,
+      action: "create",
+      path: c.path,
+      why: c.why,
+      status: stage4DoneAlready
+        ? stage4Written.has(c.path) ? "done" : "error"
+        : "pending",
+      error: stage4DoneAlready && !stage4Written.has(c.path) ? "Not written in Stage 4" : undefined,
+      stage: 4,
+    })),
+    ...HOUSEKEEPING_PATHS.map((p): PlanItem => ({
+      id: `h-${p.replace(/[\/.]/g, "-")}`,
+      action: housekeepingAction(p),
+      path: p,
+      why: p === "wiki/index.md"
+        ? "保留全部已有条目，新增本次摄入的链接"
+        : p === "wiki/overview.md"
+        ? "更新概览以反映新摄入的源"
+        : "追加本次摄入的日期分片日志条目",
+      status: stage4DoneAlready
+        ? stage4Written.has(p) ? "done" : "error"
+        : "pending",
+      error: stage4DoneAlready && !stage4Written.has(p) ? "Not written in Stage 4" : undefined,
+      stage: 4,
+    })),
+  ]
+  activity.setPlan(activityId, planItems)
+
+  const writtenPaths: string[] = [
+    ...(checkpoint.completedUpdates ?? []),
+    ...(stage4DoneAlready
+      ? (checkpoint.stage4Written ?? []).map((p) => p === "wiki/log.md" ? dailyLogRelativePath : p)
+      : []),
+  ]
+  let allReviewBlocks = checkpoint.reviewBlocksRaw ?? ""
+
+  // ── Stage 3: Updates (one LLM call per page, with retry + checkpoint per item) ──
+  const pendingUpdates = plan.update
+    .map((u, i) => ({ u, i }))
+    .filter(({ u }) => !completedUpdates.has(u.path))
+
+  if (plan.update.length > 0) {
+    activity.updateStage(activityId, 3, { status: "running" })
+    activity.updateItem(activityId, {
+      detail: pendingUpdates.length === plan.update.length
+        ? `Step 3/4: Updating ${plan.update.length} page(s)...`
+        : `Step 3/4: Resuming — ${pendingUpdates.length}/${plan.update.length} remaining`,
+    })
+    let stage3Failed = 0
+    for (const { u, i } of pendingUpdates) {
+      if (signal?.aborted) break
+      const planItemId = `u-${i}`
+      activity.updatePlanItem(activityId, planItemId, { status: "running" })
+      stream?.onStageStart?.("update", `Step 3/4: 更新 ${u.path}`)
+      try {
+        const existingContent = await tryReadFile(`${pp}/${u.path}`)
+        if (!existingContent) {
+          throw new Error(`Existing file not found: ${u.path}`)
+        }
+        const generation = await withRetry(
+          () => runUpdateStage(
+            llmConfig, fileName, u, existingContent, analysis, signal,
+            (token) => stream?.onStageToken?.(token, "update"),
+          ),
+          {
+            maxAttempts: 2,
+            backoffMs: [3000],
+            signal,
+            onRetry: (err, attempt, nextDelayMs) => {
+              debugLog("warn", "ingest-retry", `Update ${u.path} attempt ${attempt} failed, retrying`, {
+                error: err.message,
+                nextDelayMs,
+              })
+            },
+          },
+        )
+        const { written, errors: repairErrors } = await repairAndWriteBlocks(
+          llmConfig,
+          pp,
+          generation,
+          u.path,
+          signal,
+          activityId,
+          (p) => (p === u.path ? planItemId : null),
+        )
+        if (written.length === 0) {
+          const repairErr = repairErrors.get(u.path)
+          if (repairErr) {
+            debugLog("error", "ingest-update", `Schema validation failed for ${u.path}: ${repairErr}`)
+            throw new Error(repairErr)
+          }
+          debugLog("error", "ingest-update", `No FILE block parsed for ${u.path}`, {
+            expectedPath: u.path,
+            responseLength: generation.length,
+            responsePreview: generation.slice(0, 500),
+            fullResponse: generation,
+          })
+          throw new Error(
+            `LLM returned no FILE block (response length ${generation.length}, see debug.log)`,
+          )
+        }
+        writtenPaths.push(...written)
+        allReviewBlocks += "\n" + generation
+        completedUpdates.add(u.path)
+        checkpoint.completedUpdates = Array.from(completedUpdates)
+        checkpoint.reviewBlocksRaw = allReviewBlocks
+        await saveCheckpoint(pp, contentHash, checkpoint)
+        activity.updatePlanItem(activityId, planItemId, { status: "done" })
+        stream?.onStageEnd?.("update", `✓ ${u.path}`)
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        activity.updatePlanItem(activityId, planItemId, { status: "error", error: msg })
+        stream?.onStageEnd?.("update", `✗ ${u.path}: ${msg}`)
+        stage3Failed++
+      }
+    }
+    activity.updateStage(activityId, 3, {
+      status: stage3Failed === pendingUpdates.length && pendingUpdates.length > 0 ? "error" : "done",
+      error: stage3Failed > 0 ? `${stage3Failed}/${pendingUpdates.length} 失败` : undefined,
+    })
+  } else {
+    activity.updateStage(activityId, 3, { status: "done" })
+    activity.updateItem(activityId, { detail: "Step 3/4: No pages to update — skipped" })
+  }
+
+  // ── Stage 4: Creates + programmatic index/overview/log ─────────────────
+  if (signal?.aborted) {
+    activity.updateStage(activityId, 4, { status: "error", error: "Cancelled" })
+  } else if (stage4DoneAlready) {
+    activity.updateStage(activityId, 4, { status: "done" })
+    activity.updateItem(activityId, { detail: "Step 4/4: Reusing cached creates (resumed)" })
+  } else {
+    activity.updateStage(activityId, 4, { status: "running" })
+    const createCount = plan.create.length
+    activity.updateItem(activityId, {
+      detail: `Step 4/4: Creating ${createCount} new page(s) + updating index...`,
+    })
+    stream?.onStageStart?.("create", `Step 4/4: 新建 ${createCount} 个页面 + 索引/概览/日志`)
+    let createRaw = ""
+    try {
+      const createGeneration = await withRetry(
+        () =>
+          runCreateStage(
+            llmConfig,
+            plan,
+            fileName,
+            sourceBaseName,
+            analysis,
+            truncatedContent,
+            schema,
+            purpose,
+            index,
+            overview,
+            wikiDirs,
+            signal,
+            (token) => {
+              createRaw += token
+              stream?.onStageToken?.(token, "create")
+            },
+          ),
+        retryOpts("Step 4/4: Creating"),
+      )
+      const { written, errors: createErrors } = await repairAndWriteBlocks(
+        llmConfig,
+        pp,
+        createGeneration,
+        undefined,
+        signal,
+        activityId,
+        (p) => {
+          const idx = plan.create.findIndex((c) => c.path === p)
+          return idx >= 0 ? `c-${idx}` : null
+        },
+      )
+      writtenPaths.push(...written)
+      const housekeepingWritten = await writeProgrammaticHousekeeping(
+        pp,
+        sourceBaseName,
+        Array.from(new Set(writtenPaths)),
+        runDate,
+      )
+      writtenPaths.push(...housekeepingWritten)
+      const missing = plan.create.filter((c) => !written.includes(c.path))
+      if (missing.length > 0) {
+        debugLog("warn", "ingest-create", `Create stage missed ${missing.length}/${plan.create.length} planned pages`, {
+          missingPaths: missing.map((c) => c.path),
+          writtenPaths: written,
+          responseLength: createGeneration.length,
+          responsePreview: createGeneration.slice(0, 1000),
+          fullResponse: createGeneration,
+        })
+      }
+      for (let i = 0; i < plan.create.length; i++) {
+        const c = plan.create[i]
+        const wasWritten = written.some((p) => p === c.path)
+        const repairErr = createErrors.get(c.path)
+        activity.updatePlanItem(activityId, `c-${i}`, {
+          status: wasWritten ? "done" : "error",
+          error: wasWritten ? undefined : repairErr ?? "Not in LLM output",
+        })
+      }
+      for (const hk of HOUSEKEEPING_PATHS) {
+        const wasWritten = housekeepingWritten.some((p) => p === hk)
+        activity.updatePlanItem(activityId, `h-${hk.replace(/[\/.]/g, "-")}`, {
+          status: wasWritten ? "done" : "error",
+          error: wasWritten ? undefined : "Programmatic housekeeping did not write this path",
+        })
+      }
+      const missingHousekeeping = HOUSEKEEPING_PATHS.filter((p) => !housekeepingWritten.includes(p))
+      if (missingHousekeeping.length > 0) {
+        debugLog("warn", "ingest-create", `Stage 4 missed housekeeping pages: ${missingHousekeeping.join(", ")}`, {
+          writtenPaths: housekeepingWritten,
+          responseLength: createGeneration.length,
+          responsePreview: createGeneration.slice(0, 1000),
+        })
+      }
+      allReviewBlocks += "\n" + createGeneration
+      checkpoint.stage4Done = true
+      checkpoint.stage4Written = [...written, ...housekeepingWritten]
+      checkpoint.reviewBlocksRaw = allReviewBlocks
+      await saveCheckpoint(pp, contentHash, checkpoint)
+      const totalFailed = missing.length + missingHousekeeping.length
+      const totalExpected = plan.create.length + HOUSEKEEPING_PATHS.length
+      activity.updateStage(activityId, 4, {
+        status: totalFailed === totalExpected ? "error" : "done",
+        error: totalFailed > 0 ? `${totalFailed}/${totalExpected} 缺失` : undefined,
+      })
+      stream?.onStageEnd?.("create", createRaw)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      for (let i = 0; i < plan.create.length; i++) {
+        activity.updatePlanItem(activityId, `c-${i}`, { status: "error", error: msg })
+      }
+      for (const hk of HOUSEKEEPING_PATHS) {
+        activity.updatePlanItem(activityId, `h-${hk.replace(/[\/.]/g, "-")}`, {
+          status: "error",
+          error: msg,
+        })
+      }
+      activity.updateStage(activityId, 4, { status: "error", error: msg })
+      stream?.onStageEnd?.("create", `✗ Stage 4 failed: ${msg}`)
+    }
+  }
+
+  // Source summary fallback (if LLM didn't generate one)
   const sourceSummaryPath = `wiki/sources/${sourceBaseName}.md`
-  const sourceSummaryFullPath = `${pp}/${sourceSummaryPath}`
-  const hasSourceSummary = writtenPaths.some((p) => p.startsWith("wiki/sources/"))
-
+  const hasSourceSummary = writtenPaths.some((p) => p === sourceSummaryPath)
   if (!hasSourceSummary) {
     const date = new Date().toISOString().slice(0, 10)
-    const fallbackContent = [
+    const fallback = [
       "---",
       `type: source`,
       `title: "Source: ${fileName}"`,
@@ -168,18 +549,21 @@ export async function autoIngest(
       "",
       `# Source: ${fileName}`,
       "",
-      analysis || "(Analysis not available)",
+      analysis,
       "",
     ].join("\n")
     try {
-      await writeFile(sourceSummaryFullPath, fallbackContent)
+      await writeFile(`${pp}/${sourceSummaryPath}`, fallback)
       writtenPaths.push(sourceSummaryPath)
     } catch {
       // non-critical
     }
   }
 
-  if (writtenPaths.length > 0) {
+  // Dedupe written paths (defensive — shouldn't normally have dups)
+  const uniqueWritten = Array.from(new Set(writtenPaths))
+
+  if (uniqueWritten.length > 0) {
     try {
       const tree = await listDirectory(pp)
       useWikiStore.getState().setFileTree(tree)
@@ -189,23 +573,23 @@ export async function autoIngest(
     }
   }
 
-  // ── Step 4: Parse review items ────────────────────────────────
-  const reviewItems = parseReviewBlocks(generation, sp)
+  const reviewItems = parseReviewBlocks(allReviewBlocks, sp)
   if (reviewItems.length > 0) {
     useReviewStore.getState().addItems(reviewItems)
   }
 
-  // ── Step 5: Save to cache ───────────────────────────────────
-  if (writtenPaths.length > 0) {
-    await saveIngestCache(pp, fileName, sourceContent, writtenPaths)
+  if (uniqueWritten.length > 0) {
+    await saveIngestCache(pp, fileName, sourceContent, uniqueWritten)
+    // Full run succeeded — clean up the checkpoint
+    await deleteCheckpoint(pp, contentHash)
   }
 
-  // ── Step 6: Generate embeddings (if enabled) ───────────────
+  // Embeddings (existing — unchanged)
   const embCfg = useWikiStore.getState().embeddingConfig
-  if (embCfg.enabled && embCfg.model && writtenPaths.length > 0) {
+  if (embCfg.enabled && embCfg.model && uniqueWritten.length > 0) {
     try {
       const { embedPage } = await import("@/lib/embedding")
-      for (const wpath of writtenPaths) {
+      for (const wpath of uniqueWritten) {
         const pageId = wpath.split("/").pop()?.replace(/\.md$/, "") ?? ""
         if (!pageId || ["index", "log", "overview"].includes(pageId)) continue
         try {
@@ -218,122 +602,367 @@ export async function autoIngest(
         }
       }
     } catch {
-      // embedding module not available
+      // module not available
     }
   }
 
-  const detail = writtenPaths.length > 0
-    ? `${writtenPaths.length} files written${reviewItems.length > 0 ? `, ${reviewItems.length} review item(s)` : ""}`
-    : "No files generated"
+  // Final summary
+  const finalPlan =
+    useActivityStore.getState().items.find((i) => i.id === activityId)?.plan ?? []
+  const failedCount = finalPlan.filter((p) => p.status === "error").length
+
+  let detail: string
+  if (uniqueWritten.length === 0) {
+    detail = "No files generated"
+  } else {
+    const reviewSuffix = reviewItems.length > 0 ? `, ${reviewItems.length} review item(s)` : ""
+    const failSuffix = failedCount > 0 ? ` (${failedCount} failed)` : ""
+    detail = `${uniqueWritten.length} files written${reviewSuffix}${failSuffix}`
+  }
 
   activity.updateItem(activityId, {
-    status: writtenPaths.length > 0 ? "done" : "error",
+    status: uniqueWritten.length > 0 ? "done" : "error",
     detail,
-    filesWritten: writtenPaths,
+    filesWritten: uniqueWritten,
   })
 
-  return writtenPaths
+  return uniqueWritten
 }
 
-async function writeFileBlocks(
-  projectPath: string,
-  text: string,
-): Promise<string[]> {
-  const writtenPaths: string[] = []
-  const matches = text.matchAll(FILE_BLOCK_REGEX)
+// ── Stage runners ─────────────────────────────────────────────
 
-  for (const match of matches) {
-    const relativePath = match[1].trim()
-    const content = match[2]
-    if (!relativePath) continue
+async function runAnalysisStage(
+  llmConfig: LlmConfig,
+  fileName: string,
+  truncatedContent: string,
+  purpose: string,
+  index: string,
+  folderContext: string | undefined,
+  signal: AbortSignal | undefined,
+  onToken?: (token: string) => void,
+): Promise<string> {
+  let analysis = ""
+  let failed = false
+  let failMsg = ""
 
-    const fullPath = `${projectPath}/${relativePath}`
-    try {
-      if (relativePath === "wiki/log.md" || relativePath.endsWith("/log.md")) {
-        const existing = await tryReadFile(fullPath)
-        const appended = existing ? `${existing}\n\n${content.trim()}` : content.trim()
-        await writeFile(fullPath, appended)
-      } else {
-        await writeFile(fullPath, content)
-      }
-      writtenPaths.push(relativePath)
-    } catch (err) {
-      console.error(`Failed to write ${fullPath}:`, err)
+  await streamChat(
+    llmConfig,
+    [
+      { role: "system", content: buildAnalysisPrompt(purpose, index) },
+      {
+        role: "user",
+        content: `Analyze this source document:\n\n**File:** ${fileName}${
+          folderContext ? `\n**Folder context:** ${folderContext}` : ""
+        }\n\n---\n\n${truncatedContent}`,
+      },
+    ],
+    {
+      onToken: (token) => {
+        analysis += token
+        onToken?.(token)
+      },
+      onDone: () => {},
+      onError: (err) => {
+        failed = true
+        failMsg = err.message
+      },
+    },
+    signal,
+  )
+
+  if (failed) {
+    throw new Error(failMsg)
+  }
+  return analysis
+}
+
+async function runPlanStage(
+  llmConfig: LlmConfig,
+  fileName: string,
+  sourceBaseName: string,
+  analysis: string,
+  schema: string,
+  index: string,
+  wikiDirs: string[],
+  signal: AbortSignal | undefined,
+  onToken?: (token: string) => void,
+): Promise<Plan> {
+  let raw = ""
+  let failed = false
+  let failMsg = ""
+
+  await streamChat(
+    llmConfig,
+    [
+      {
+        role: "system",
+        content: buildPlanPrompt(schema, index, wikiDirs, fileName, sourceBaseName),
+      },
+      {
+        role: "user",
+        content: [
+          `Source file: **${fileName}**`,
+          "",
+          "## Source analysis",
+          "",
+          analysis,
+        ].join("\n"),
+      },
+    ],
+    {
+      onToken: (token) => {
+        raw += token
+        onToken?.(token)
+      },
+      onDone: () => {},
+      onError: (err) => {
+        failed = true
+        failMsg = err.message
+      },
+    },
+    signal,
+  )
+
+  if (failed) {
+    throw new Error(failMsg)
+  }
+  return parsePlan(raw)
+}
+
+async function runUpdateStage(
+  llmConfig: LlmConfig,
+  fileName: string,
+  page: PlanUpdateItem,
+  existingContent: string,
+  analysis: string,
+  signal: AbortSignal | undefined,
+  onToken?: (token: string) => void,
+): Promise<string> {
+  let raw = ""
+  let failed = false
+  let failMsg = ""
+
+  await streamChat(
+    llmConfig,
+    [
+      { role: "system", content: buildUpdatePrompt(page, nowLocalTimestamp()) },
+      {
+        role: "user",
+        content: [
+          `## Why this page is being updated`,
+          page.why ?? "(no explicit reason from plan)",
+          "",
+          `## Existing content of ${page.path}`,
+          existingContent,
+          "",
+          `## Source analysis`,
+          analysis,
+          "",
+          `## Source filename`,
+          fileName,
+        ].join("\n"),
+      },
+    ],
+    {
+      onToken: (token) => {
+        raw += token
+        onToken?.(token)
+      },
+      onDone: () => {},
+      onError: (err) => {
+        failed = true
+        failMsg = err.message
+      },
+    },
+    signal,
+  )
+
+  if (failed) {
+    throw new Error(failMsg)
+  }
+  return raw
+}
+
+async function runCreateStage(
+  llmConfig: LlmConfig,
+  plan: Plan,
+  fileName: string,
+  sourceBaseName: string,
+  analysis: string,
+  truncatedContent: string,
+  schema: string,
+  purpose: string,
+  index: string,
+  overview: string,
+  wikiDirs: string[],
+  signal: AbortSignal | undefined,
+  onToken?: (token: string) => void,
+): Promise<string> {
+  let raw = ""
+  let failed = false
+  let failMsg = ""
+
+  await streamChat(
+    llmConfig,
+    [
+      {
+        role: "system",
+        content: buildCreatePrompt(plan, schema, purpose, index, overview, wikiDirs, fileName, sourceBaseName, nowLocalTimestamp()),
+      },
+      {
+        role: "user",
+        content: [
+          `Generate only the wiki content pages listed in the plan. The app will update index, overview, and daily logs automatically.`,
+          "",
+          "## Source analysis",
+          "",
+          analysis,
+          "",
+          "## Original source content",
+          "",
+          truncatedContent,
+        ].join("\n"),
+      },
+    ],
+    {
+      onToken: (token) => {
+        raw += token
+        onToken?.(token)
+      },
+      onDone: () => {},
+      onError: (err) => {
+        failed = true
+        failMsg = err.message
+      },
+    },
+    signal,
+  )
+
+  if (failed) {
+    throw new Error(failMsg)
+  }
+  return raw
+}
+
+// ── Plan parsing & normalization ──────────────────────────────
+
+function parsePlan(rawText: string): Plan {
+  const fencedJson = rawText.match(/```json\s*\n([\s\S]*?)```/i)
+  const fencedAny = rawText.match(/```\s*\n([\s\S]*?)```/)
+  let jsonText: string | null = null
+  if (fencedJson) {
+    jsonText = fencedJson[1]
+  } else if (fencedAny) {
+    jsonText = fencedAny[1]
+  } else {
+    const start = rawText.indexOf("{")
+    const end = rawText.lastIndexOf("}")
+    if (start >= 0 && end > start) {
+      jsonText = rawText.slice(start, end + 1)
+    }
+  }
+  if (!jsonText) {
+    throw new Error("no JSON block found in LLM output")
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(jsonText.trim())
+  } catch (err) {
+    throw new Error(`invalid JSON — ${err instanceof Error ? err.message : String(err)}`)
+  }
+  if (!parsed || typeof parsed !== "object") {
+    throw new Error("parsed value is not an object")
+  }
+  const obj = parsed as { create?: unknown; update?: unknown }
+
+  const create: PlanCreateItem[] = []
+  if (Array.isArray(obj.create)) {
+    for (const raw of obj.create) {
+      if (!raw || typeof raw !== "object") continue
+      const item = raw as Record<string, unknown>
+      const path = typeof item.path === "string" ? item.path.trim() : ""
+      if (!path.startsWith("wiki/") || !path.endsWith(".md")) continue
+      if (RESERVED_PATHS.has(path)) continue
+      create.push({
+        path,
+        type: typeof item.type === "string" ? item.type : "",
+        title: typeof item.title === "string" ? item.title : path,
+        why: typeof item.why === "string" ? item.why : undefined,
+      })
     }
   }
 
-  return writtenPaths
-}
-
-const REVIEW_BLOCK_REGEX = /---REVIEW:\s*(\w[\w-]*)\s*\|\s*(.+?)\s*---\n([\s\S]*?)---END REVIEW---/g
-
-function parseReviewBlocks(
-  text: string,
-  sourcePath: string,
-): Omit<ReviewItem, "id" | "resolved" | "createdAt">[] {
-  const items: Omit<ReviewItem, "id" | "resolved" | "createdAt">[] = []
-  const matches = text.matchAll(REVIEW_BLOCK_REGEX)
-
-  for (const match of matches) {
-    const rawType = match[1].trim().toLowerCase()
-    const title = match[2].trim()
-    const body = match[3].trim()
-
-    const type = (
-      ["contradiction", "duplicate", "missing-page", "suggestion"].includes(rawType)
-        ? rawType
-        : "confirm"
-    ) as ReviewItem["type"]
-
-    // Parse OPTIONS line
-    const optionsMatch = body.match(/^OPTIONS:\s*(.+)$/m)
-    const options = optionsMatch
-      ? optionsMatch[1].split("|").map((o) => {
-          const label = o.trim()
-          return { label, action: label }
-        })
-      : [
-          { label: "Approve", action: "Approve" },
-          { label: "Skip", action: "Skip" },
-        ]
-
-    // Parse PAGES line
-    const pagesMatch = body.match(/^PAGES:\s*(.+)$/m)
-    const affectedPages = pagesMatch
-      ? pagesMatch[1].split(",").map((p) => p.trim())
-      : undefined
-
-    // Parse SEARCH line (optimized search queries for Deep Research)
-    const searchMatch = body.match(/^SEARCH:\s*(.+)$/m)
-    const searchQueries = searchMatch
-      ? searchMatch[1].split("|").map((q) => q.trim()).filter((q) => q.length > 0)
-      : undefined
-
-    // Description is the body minus OPTIONS, PAGES, and SEARCH lines
-    const description = body
-      .replace(/^OPTIONS:.*$/m, "")
-      .replace(/^PAGES:.*$/m, "")
-      .replace(/^SEARCH:.*$/m, "")
-      .trim()
-
-    items.push({
-      type,
-      title,
-      description,
-      sourcePath,
-      affectedPages,
-      searchQueries,
-      options,
-    })
+  const update: PlanUpdateItem[] = []
+  if (Array.isArray(obj.update)) {
+    for (const raw of obj.update) {
+      if (!raw || typeof raw !== "object") continue
+      const item = raw as Record<string, unknown>
+      const path = typeof item.path === "string" ? item.path.trim() : ""
+      if (!path.startsWith("wiki/") || !path.endsWith(".md")) continue
+      if (RESERVED_PATHS.has(path)) continue
+      update.push({
+        path,
+        why: typeof item.why === "string" ? item.why : undefined,
+      })
+    }
   }
 
-  return items
+  return { create, update }
 }
 
 /**
- * Step 1 prompt: AI reads the source and produces a structured analysis.
- * This is the "discussion" step — the AI reasons about the source before writing wiki pages.
+ * Reconcile plan with filesystem reality. Action is determined by whether
+ * the file exists on disk, not by which bucket the LLM put it in.
+ *   - create entries that already exist on disk → move to update
+ *   - update entries that don't exist on disk   → move to create (with inferred metadata)
  */
+async function normalizePlan(pp: string, plan: Plan): Promise<Plan> {
+  const create: PlanCreateItem[] = []
+  const update: PlanUpdateItem[] = []
+  const seen = new Set<string>()
+
+  for (const c of plan.create) {
+    if (seen.has(c.path)) continue
+    seen.add(c.path)
+    const existing = await tryReadFile(`${pp}/${c.path}`)
+    if (existing) {
+      update.push({ path: c.path, why: c.why })
+    } else {
+      create.push(c)
+    }
+  }
+  for (const u of plan.update) {
+    if (seen.has(u.path)) continue
+    seen.add(u.path)
+    const existing = await tryReadFile(`${pp}/${u.path}`)
+    if (existing) {
+      update.push(u)
+    } else {
+      // LLM mis-categorized — move to create with inferred metadata
+      create.push({
+        path: u.path,
+        type: inferTypeFromPath(u.path),
+        title: pathToTitle(u.path),
+        why: u.why,
+      })
+    }
+  }
+  return { create, update }
+}
+
+function inferTypeFromPath(path: string): string {
+  const m = path.match(/^wiki\/([^/]+)\//)
+  return m ? m[1] : ""
+}
+
+function pathToTitle(path: string): string {
+  const base = path.replace(/^wiki\//, "").replace(/\.md$/, "")
+  const last = base.split("/").pop() ?? base
+  return last.replace(/-/g, " ")
+}
+
+// ── Prompt builders ───────────────────────────────────────────
+
 function buildAnalysisPrompt(purpose: string, index: string): string {
   return [
     "You are an expert research analyst. Read the source document and produce a structured analysis.",
@@ -368,7 +997,20 @@ function buildAnalysisPrompt(purpose: string, index: string): string {
     "- Are there internal tensions or caveats?",
     "",
     "## Recommendations",
-    "- What wiki pages should be created or updated?",
+    "Be exhaustive and concrete — every page the source mentions or implies should appear here, never silently dropped.",
+    "",
+    "### 建议更新（Pages to Update）",
+    "List existing wiki pages that should absorb new content from this source. For each:",
+    "- Exact wiki path (e.g. `wiki/概念/<slug>.md`)",
+    "- One-sentence summary of what new content to add",
+    "",
+    "### 建议新建 / 可考虑新建（Pages to Create）",
+    "List new wiki pages that should be created. **Treat the source's own \"可考虑新建\" / \"建议新建\" / \"recommend creating\" lists as authoritative — every page named there MUST appear here verbatim, do not filter as \"optional\".** For each:",
+    "- Exact wiki path (e.g. `wiki/模式/<slug>.md`)",
+    "- Type (use Chinese type when wiki schema uses Chinese: 股票/策略/模式/错误/市场环境/进化/总结/概念)",
+    "- One-sentence reason for creating",
+    "",
+    "### Other",
     "- What should be emphasized vs. de-emphasized?",
     "- Any open questions worth flagging for the user?",
     "",
@@ -378,90 +1020,200 @@ function buildAnalysisPrompt(purpose: string, index: string): string {
     "",
     purpose ? `## Wiki Purpose (for context)\n${purpose}` : "",
     index ? `## Current Wiki Index (for checking existing content)\n${index}` : "",
-  ].filter(Boolean).join("\n")
+  ]
+    .filter(Boolean)
+    .join("\n")
 }
 
-/**
- * Step 2 prompt: AI takes its own analysis and generates wiki files + review items.
- */
-function buildGenerationPrompt(schema: string, purpose: string, index: string, sourceFileName: string, overview?: string, wikiDirs?: string[]): string {
-  // Use original filename (without extension) as the source summary page name
-  const sourceBaseName = sourceFileName.replace(/\.[^.]+$/, "")
-
+function buildPlanPrompt(
+  schema: string,
+  index: string,
+  wikiDirs: string[],
+  fileName: string,
+  sourceBaseName: string,
+): string {
   return [
-    "You are a wiki maintainer. Based on the analysis provided, generate wiki files.",
+    "You are a wiki maintainer. Based on the source analysis you will receive, output a JSON plan",
+    "listing exactly which wiki pages need to be created or updated.",
     "",
     LANGUAGE_RULE,
     "",
-    `## IMPORTANT: Source File`,
-    `The original source file is: **${sourceFileName}**`,
-    `All wiki pages generated from this source MUST include this filename in their frontmatter \`sources\` field.`,
+    "## Output format (CRITICAL)",
     "",
-    "## Output Format",
+    "Output ONLY a single ```json``` fenced block. No prose before or after.",
     "",
-    "Output each wiki file in this exact format:",
-    "",
-    "---FILE: wiki/sources/filename.md---",
-    "(complete file content with YAML frontmatter)",
-    "---END FILE---",
-    "",
-    "Generate:",
-    `1. A source summary page at **wiki/sources/${sourceBaseName}.md** (MUST use this exact path)`,
-    `2. Entity/concept/strategy/stock pages in the appropriate wiki subdirectory. Available directories: ${wikiDirs && wikiDirs.length > 0 ? wikiDirs.join(", ") : "wiki/entities/, wiki/concepts/"}.`,
-    `   CRITICAL RULES:`,
-    `   (a) You MUST use ONLY the directories listed above. Do NOT create any new directories.`,
-    `   (b) If a Chinese directory exists for a page type (e.g. wiki/股票/, wiki/策略/, wiki/模式/), you MUST use the Chinese directory and NEVER use its English equivalent (e.g. wiki/stocks/, wiki/strategies/, wiki/patterns/).`,
-    `   (c) The frontmatter \`type\` field determines the directory. Map: 股票→wiki/股票/, 策略→wiki/策略/, 模式→wiki/模式/, 错误→wiki/错误/, 市场环境→wiki/市场环境/, 进化→wiki/进化/, 总结→wiki/总结/. If no matching dir exists, use the closest available one.`,
-    `   (d) Filenames inside subdirectories must be kebab-case, e.g. wiki/股票/沃格光电.md.`,
-    "4. An updated wiki/index.md — add new entries to existing categories, preserve all existing entries",
-    "5. A log entry for wiki/log.md (just the new entry to append, format: ## [YYYY-MM-DD] ingest | Title)",
-    "6. An updated wiki/overview.md — a high-level summary of what the entire wiki covers, updated to reflect the newly ingested source. This should be a comprehensive 2-5 paragraph overview of ALL topics in the wiki, not just the new source.",
-    "",
-    "## Frontmatter Rules (CRITICAL)",
-    "",
-    "Every page MUST have YAML frontmatter with these fields:",
-    "```yaml",
-    "---",
-    "type: source | 股票 | 策略 | 模式 | 错误 | 市场环境 | 进化 | 总结 | 预测",
-    "title: Human-readable title",
-    "created: YYYY-MM-DD",
-    "updated: YYYY-MM-DD",
-    "tags: []",
-    "related: []",
-    `sources: ["${sourceFileName}"]  # MUST contain the original source filename`,
-    "confidence_grade: B  # A/B/C/D/E — see rules below",
-    "confidence_reason: 基于2份来源的分析",
-    "---",
+    "```json",
+    "{",
+    `  "create": [`,
+    `    {"path": "wiki/<dir>/<slug>.md", "type": "<type>", "title": "...", "why": "..."}`,
+    "  ],",
+    `  "update": [`,
+    `    {"path": "wiki/<existing>.md", "why": "..."}`,
+    "  ]",
+    "}",
     "```",
     "",
-    `IMPORTANT: The exact \`type\` values MUST follow the Wiki Schema above. If the schema defines Chinese types (e.g. \`策略\`, \`股票\`, \`模式\`, \`错误\`, \`市场环境\`, \`进化\`, \`总结\`, \`预测\`), use those Chinese values. Do NOT use English types like \`entity\` or \`concept\` when Chinese equivalents are defined in the schema.`,
-    `CRITICAL: The frontmatter \`type\` field must match the directory where the file is placed. For example, a file at \`wiki/股票/沃格光电.md\` must have \`type: 股票\`, NOT \`type: entity\` or \`type: 个股\`.`,
+    "## Rules",
     "",
-    `The \`sources\` field MUST always contain "${sourceFileName}" — this links the wiki page back to the original uploaded document.`,
+    `- Available directories: ${wikiDirs.length > 0 ? wikiDirs.join(", ") : "wiki/entities/, wiki/concepts/"}`,
+    `- You MUST use ONLY directories from the list above. Do NOT invent new directories.`,
+    `- If Chinese directories exist (e.g. wiki/股票/, wiki/策略/, wiki/模式/), you MUST use them and NEVER use English equivalents (wiki/stocks/, wiki/strategies/, wiki/patterns/).`,
+    `- Map types: 股票→wiki/股票/, 策略→wiki/策略/, 模式→wiki/模式/, 错误→wiki/错误/, 市场环境→wiki/市场环境/, 进化→wiki/进化/, 总结→wiki/总结/.`,
+    `- Filenames inside subdirectories must be kebab-case for ASCII; preserve original Chinese for Chinese names. e.g. wiki/股票/沃格光电.md.`,
+    `- The source summary page **wiki/sources/${sourceBaseName}.md** MUST appear in the plan (in \`create\` if new, or \`update\` if it already exists in the index).`,
+    `- DO NOT include wiki/index.md, wiki/overview.md, or wiki/log.md in the plan — the system handles those automatically in the create stage.`,
     "",
-    "## Confidence Rules",
+    "## CRITICAL: Don't drop recommended pages",
     "",
-    "Each page MUST include a `confidence_grade` field. Do NOT guess a number. Instead, evaluate the evidence quality and pick a grade:",
+    `- The source analysis may contain sections labelled "建议更新" / "建议新建" / "可考虑新建" / "可新建" / "应新建" / "should create" / "recommend creating" / "consider creating".`,
+    `- **Every page mentioned in such a section MUST appear in this plan** — even if the section says "可考虑" (could consider). Treat them as authoritative, not optional.`,
+    `- Put pages with paths that are NOT in the current wiki index into \`create\`.`,
+    `- Put pages with paths that ARE in the current wiki index into \`update\`.`,
+    `- If a wikilink style \`[模式/xxx](wikilink:模式/xxx)\` appears in the recommendations, convert to \`wiki/模式/xxx.md\` and include in the plan.`,
+    `- Do not silently filter out recommendations you think are low-value — the source author already curated them.`,
+    `- For \`update\`, do not pad the list with pages the source didn't actually touch — but DO include every page explicitly suggested.`,
+    `- The \`why\` field should be a one-sentence reason that will guide the next stage's writing.`,
     "",
-    "| Grade | Condition | Example |",
-    "|-------|-----------|---------|",
-    "| A | 3+ independent sources confirm, no contradictions, recently verified | 研报+交割单+复盘三重验证 |",
-    "| B | 2+ sources support, no known contradictions | 研报+复盘验证 |",
-    "| C | Single source, or limited evidence | 仅一份研报 |",
-    "| D | Speculative, based on reasoning with little direct evidence | 基于盘面推测 |",
-    "| E | Hypothesis/guess, explicitly needs verification | 初步猜想 |",
+    schema ? `## Wiki Schema\n${schema}` : "",
+    index ? `## Current Wiki Index (use this to decide what already exists)\n${index}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n")
+}
+
+function buildSchemaSection(types: WikiType[], nowTs: string): string {
+  const uniq = Array.from(new Set(types.length > 0 ? types : (["概念"] as WikiType[])))
+  const samples = uniq
+    .map((t) => `### Canonical sample (type=${t})\n\n${canonicalSampleFor(t)}`)
+    .join("\n")
+  return [
+    "## Frontmatter Schema (Schema v1)",
     "",
-    "Also include `confidence_reason`: a brief explanation of why this grade was chosen (e.g. '基于2份研报和1份交割单验证').",
+    "Every page MUST begin with valid YAML frontmatter delimited by `---`.",
+    "**Never** wrap the frontmatter in a ```yaml fenced code block — output the bare `---` delimiters.",
+    "",
+    "### Required fields",
+    "- `schema_version: 1`",
+    "- `title` — must match the file name (without `.md`)",
+    `- \`type\` — one of: ${WIKI_TYPES.join(" / ")}`,
+    "- `summary` — 50–120 字概括，**严禁照搬正文段落**；只做高度概括，便于检索召回",
+    "- `created`, `updated`, `last_reviewed` — format `YYYY-MM-DD HH:mm:ss`. Use `" +
+      nowTs +
+      "` for new fields; preserve existing `created`.",
+    `- \`confidence\` — one of: ${CONFIDENCE.join(" / ")}`,
+    `- \`status\` — one of: ${WIKI_STATUS.join(" / ")}`,
+    "",
+    "### Type-specific required fields",
+    "- type=股票: `code` (e.g. `SZ301580`). The system will OVERWRITE this from a DB lookup — your value will be discarded, but the field must be present.",
+    "",
+    "### Optional fields",
+    "- `aliases` — array of alternative names (also works on 概念 pages)",
+    "- `tags`, `related`, `sources`",
+    '- `related` items must be wikilink strings, format `"[[type/name]]"` (with the quotes)',
+    "- `sources` items: raw source file names, NO `.md` suffix, NO LLM-reply prefixes like 「好的，以下是」",
+    "- type=概念: `parent`, `momentum` (热/活跃/降温/已死), `catalysts`",
+    "- type=股票: `industry`, `concepts`",
+    "",
+    "### Format rules",
+    "- Do NOT include duplicate keys.",
+    "- Do NOT output any field name in English when a Chinese enum value is defined (status, type, confidence, momentum).",
+    "- Timestamps must include seconds (HH:mm:ss). Date-only like `2026-05-08` is INVALID.",
+    "",
+    samples,
+  ].join("\n")
+}
+
+function buildUpdatePrompt(page: PlanUpdateItem, nowTs: string): string {
+  const type = inferTypeFromPath(page.path)
+  return [
+    "You are updating an existing wiki page with new information from a source.",
+    "",
+    LANGUAGE_RULE,
+    "",
+    "## CRITICAL RULES",
+    "",
+    "1. **Preserve ALL existing content.** Every section, every fact, every [[wikilink]],",
+    "   every frontmatter field must remain. You MAY add, refine, or update wording — you",
+    "   MUST NOT delete or shorten existing content.",
+    `2. Set the \`updated\` field to \`${nowTs}\`. Preserve \`created\`.`,
+    "3. Add the source filename (without `.md`) to the `sources` array if not already present.",
+    "4. Keep `type` and `created` unchanged. If the existing frontmatter is missing required fields, fill them per the schema below.",
+    "5. Output exactly ONE FILE block containing the FULL merged page:",
+    "",
+    "   ---FILE: " + page.path + "---",
+    "   (full updated content, including frontmatter)",
+    "   ---END FILE---",
+    "",
+    "Do NOT output any other text outside the FILE block.",
+    "Do NOT wrap the frontmatter in ```yaml ... ``` — emit the bare `---` delimiters only.",
+    "",
+    buildSchemaSection([type], nowTs),
+  ].join("\n")
+}
+
+function buildCreatePrompt(
+  plan: Plan,
+  schema: string,
+  purpose: string,
+  index: string,
+  overview: string,
+  wikiDirs: string[],
+  fileName: string,
+  sourceBaseName: string,
+  nowTs: string,
+): string {
+  const createList = plan.create.length > 0
+    ? plan.create
+        .map(
+          (c, i) =>
+            `${i + 1}. **${c.path}** — type: ${c.type || "(inferred)"}, title: "${c.title}"${
+              c.why ? `, why: ${c.why}` : ""
+            }`,
+        )
+        .join("\n")
+    : "(none)"
+
+  const typesInPlan: WikiType[] = plan.create
+    .map((c) => normalizeTypeAlias(c.type) ?? inferTypeFromPath(c.path))
+    .filter((t): t is WikiType => !!t)
+
+  return [
+    "You are a wiki maintainer. Generate only the new wiki content files listed below.",
+    "Do NOT output wiki/index.md, wiki/overview.md, wiki/log.md, or wiki/logs/**.",
+    "",
+    LANGUAGE_RULE,
+    "",
+    `## Source File: ${fileName}`,
+    `All wiki pages generated MUST include "${sourceBaseName}" in their frontmatter \`sources\` field.`,
+    "",
+    "## Pages to create (from the plan)",
+    "",
+    createList,
+    "",
+    "## Output format",
+    "",
+    "Output each file in this exact format:",
+    "",
+    "---FILE: wiki/<path>.md---",
+    "(complete file content with YAML frontmatter — NEVER wrap the frontmatter in ```yaml)",
+    "---END FILE---",
+    "",
+    "Generate exactly these files:",
+    `1. Each page from the create list above (do not skip any).`,
+    `2. Do not output housekeeping files. The app will merge index.md, overview.md, and daily logs after content pages are written.`,
+    "",
+    buildSchemaSection(typesInPlan, nowTs),
+    "",
+    `Source summary page is **wiki/源文档/${sourceBaseName}.md** (when in the create list). Type for that page is \`源文档\`.`,
     "",
     "Other rules:",
     "- Use [[wikilink]] syntax for cross-references between pages",
-    "- Use kebab-case filenames",
-    "- Follow the analysis recommendations on what to emphasize",
-    "- If the analysis found connections to existing pages, add cross-references",
+    "- Filenames inside subdirectories: preserve the original Chinese title for CJK names, kebab-case for ASCII",
+    `- Available directories: ${wikiDirs.length > 0 ? wikiDirs.join(", ") : "wiki/股票/, wiki/概念/"}`,
     "",
-    "## Review Items",
+    "## Review Items (optional)",
     "",
-    "After the FILE blocks, output REVIEW blocks for anything that needs human judgment:",
+    "After all FILE blocks, output REVIEW blocks for things that need human judgment:",
     "",
     "---REVIEW: type | Title---",
     "Description of what needs the user's attention.",
@@ -470,37 +1222,557 @@ function buildGenerationPrompt(schema: string, purpose: string, index: string, s
     "SEARCH: search query 1 | search query 2 | search query 3",
     "---END REVIEW---",
     "",
-    "Review types and when to use:",
-    "- contradiction: the analysis found conflicts with existing wiki content",
-    "- duplicate: an entity/concept might already exist under a different name in the index",
-    "- missing-page: an important concept is referenced but has no dedicated page",
-    "- suggestion: ideas for further research, related sources to look for, or connections worth exploring",
-    "",
-    "## OPTIONS Rules (CRITICAL — only use these predefined options):",
-    "",
-    "For each review type, use ONLY these allowed OPTIONS:",
-    "",
-    "- contradiction: OPTIONS: Create Page | Skip",
-    "- duplicate: OPTIONS: Create Page | Skip",
-    "- missing-page: OPTIONS: Create Page | Skip",
-    "- suggestion: OPTIONS: Create Page | Skip",
-    "",
-    "The user also has a 'Deep Research' button (auto-added by the system) that triggers web search.",
-    "Do NOT invent custom option labels. Only use 'Create Page' and 'Skip'.",
-    "",
-    "IMPORTANT for suggestion and missing-page types:",
-    "- The SEARCH field must contain 2-3 web search queries optimized for finding relevant papers, articles, or documentation.",
-    "- These should be specific, keyword-rich queries suitable for a search engine — NOT titles or sentences.",
-    "- Example: for a suggestion about 'automated debt detection in AI-generated code', good SEARCH queries would be:",
-    "  SEARCH: automated technical debt detection AI generated code | software quality metrics LLM code generation | static analysis tools agentic software development",
-    "",
-    "Only create reviews for things that genuinely need human input. Don't create trivial reviews.",
+    "Review types: contradiction, duplicate, missing-page, suggestion.",
+    "Allowed OPTIONS: \"Create Page | Skip\" only. Do NOT invent custom options.",
+    "Only emit reviews for things that genuinely need human input. Don't pad.",
     "",
     purpose ? `## Wiki Purpose\n${purpose}` : "",
     schema ? `## Wiki Schema\n${schema}` : "",
-    index ? `## Current Wiki Index (preserve all existing entries, add new ones)\n${index}` : "",
-    overview ? `## Current Overview (update this to reflect the new source)\n${overview}` : "",
-  ].filter(Boolean).join("\n")
+    index ? `## Current Wiki Index (for link awareness only; do not output index.md)\n${index}` : "",
+    overview ? `## Current Overview (for context only; do not output overview.md)\n${overview}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n")
+}
+
+// ── File-block writer ─────────────────────────────────────────
+
+export type FileBlock = { path: string; content: string }
+
+const SCHEMA_RETRY_MAX = 3
+
+function isManagedLogPath(relativePath: string): boolean {
+  return relativePath === "wiki/log.md" || /^wiki\/logs\/log-\d{4}-\d{2}-\d{2}\.md$/.test(relativePath)
+}
+
+function wikiLinkForPath(relativePath: string): string {
+  return `[[${relativePath.replace(/^wiki\//, "").replace(/\.md$/i, "")}]]`
+}
+
+function fallbackTitleForPath(relativePath: string): string {
+  return relativePath.split("/").pop()?.replace(/\.md$/i, "") || relativePath
+}
+
+async function indexEntryInputForPath(projectPath: string, relativePath: string): Promise<IndexEntryInput | null> {
+  if (!relativePath.startsWith("wiki/") || !relativePath.endsWith(".md")) return null
+  if (RESERVED_PATHS.has(relativePath) || isManagedLogPath(relativePath)) return null
+
+  const content = await tryReadFile(`${projectPath}/${relativePath}`)
+  if (!content.trim()) return null
+
+  const parsed = parseFrontmatter(content)
+  const heading = parsed.body.match(/^#\s+(.+)$/m)?.[1]?.trim()
+  const title = typeof parsed.fm.title === "string" && parsed.fm.title.trim()
+    ? parsed.fm.title.trim()
+    : heading ?? fallbackTitleForPath(relativePath)
+  const summary = typeof parsed.fm.summary === "string" ? parsed.fm.summary.trim() : undefined
+
+  return { path: relativePath, title, summary }
+}
+
+function buildOverviewIngestLine(sourceBaseName: string, pagePaths: string[], date: Date): string {
+  const contentPages = pagePaths
+    .filter((p) => p.startsWith("wiki/") && p.endsWith(".md") && !RESERVED_PATHS.has(p) && !isManagedLogPath(p))
+  const links = contentPages.slice(0, 8).map(wikiLinkForPath).join(", ")
+  const more = contentPages.length > 8 ? `, +${contentPages.length - 8} more` : ""
+  return `- ${localDateString(date)}: ${sourceBaseName}${links ? ` - ${links}${more}` : ""}`
+}
+
+function mergeOverviewIngestLine(
+  existingOverview: string,
+  sourceBaseName: string,
+  pagePaths: string[],
+  date: Date,
+): string {
+  const base = existingOverview.trim() ? existingOverview.replace(/\s*$/, "") : "# Wiki Overview"
+  const escapedSource = sourceBaseName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+  const existingLine = new RegExp(`^- \\d{4}-\\d{2}-\\d{2}: ${escapedSource}(?:\\s|$)`, "m")
+  if (existingLine.test(base)) return `${base}\n`
+
+  const line = buildOverviewIngestLine(sourceBaseName, pagePaths, date)
+  const headerRegex = /(^|\n)## Recent Ingests\n/
+  const match = headerRegex.exec(base)
+  if (!match) {
+    return `${base}\n\n## Recent Ingests\n${line}\n`
+  }
+  const insertAt = match.index + match[0].length
+  return `${base.slice(0, insertAt)}${line}\n${base.slice(insertAt).replace(/^\n/, "")}\n`
+}
+
+function buildIngestLogEntry(sourceBaseName: string, pagePaths: string[], date: Date): string {
+  const contentPages = pagePaths
+    .filter((p) => p.startsWith("wiki/") && p.endsWith(".md") && !RESERVED_PATHS.has(p) && !isManagedLogPath(p))
+  const shown = contentPages.slice(0, 12).map((p) => `- ${p}`)
+  const omitted = contentPages.length > shown.length ? [`- ... ${contentPages.length - shown.length} more page(s)`] : []
+
+  return [
+    `## [${localDateString(date)}] ingest | ${sourceBaseName}`,
+    "",
+    `Pages written/updated: ${contentPages.length}`,
+    ...shown,
+    ...omitted,
+  ].join("\n")
+}
+
+async function writeProgrammaticHousekeeping(
+  projectPath: string,
+  sourceBaseName: string,
+  pagePaths: string[],
+  date: Date,
+): Promise<string[]> {
+  const uniquePagePaths = Array.from(new Set(pagePaths))
+  const entries = (await Promise.all(
+    uniquePagePaths.map((relativePath) => indexEntryInputForPath(projectPath, relativePath)),
+  )).filter((entry): entry is IndexEntryInput => entry !== null)
+
+  const written: string[] = []
+  const indexPath = `${projectPath}/wiki/index.md`
+  const overviewPath = `${projectPath}/wiki/overview.md`
+  const existingIndex = await tryReadFile(indexPath)
+  const existingOverview = await tryReadFile(overviewPath)
+
+  await writeFile(indexPath, mergeIndexEntries(existingIndex, entries))
+  written.push("wiki/index.md")
+
+  await writeFile(overviewPath, mergeOverviewIngestLine(existingOverview, sourceBaseName, uniquePagePaths, date))
+  written.push("wiki/overview.md")
+
+  const logPath = await appendDailyLog(projectPath, buildIngestLogEntry(sourceBaseName, uniquePagePaths, date), date)
+  written.push(logPath)
+
+  return written
+}
+
+function buildRetryPrompt(
+  block: FileBlock,
+  violations: SchemaViolation[],
+  type: WikiType,
+  attemptNum: number,
+): string {
+  const bullets = violations.map((v) => `- ${v.field}: ${v.message}`).join("\n")
+  return [
+    `[Retry attempt ${attemptNum}/${SCHEMA_RETRY_MAX}] Your previous FILE block had these schema violations:`,
+    bullets,
+    "",
+    "Preserve ALL body content below the closing `---` delimiter exactly as-is — do NOT rewrite the prose.",
+    "ONLY fix the frontmatter to satisfy the schema. Never wrap the frontmatter in ```yaml.",
+    "",
+    "--- Previous FILE block ---",
+    `---FILE: ${block.path}---`,
+    block.content,
+    "---END FILE---",
+    "",
+    `--- Canonical sample for type "${type}" ---`,
+    canonicalSampleFor(type),
+    "",
+    "Output the corrected FILE block now, including `---FILE:` and `---END FILE---` markers. Do not modify any body content.",
+  ].join("\n")
+}
+
+async function runRetryRequest(
+  llmConfig: LlmConfig,
+  prompt: string,
+  signal: AbortSignal | undefined,
+): Promise<string> {
+  let raw = ""
+  let failed = false
+  let failMsg = ""
+  await streamChat(
+    llmConfig,
+    [{ role: "system", content: prompt }],
+    {
+      onToken: (t) => {
+        raw += t
+      },
+      onDone: () => {},
+      onError: (err) => {
+        failed = true
+        failMsg = err.message
+      },
+    },
+    signal,
+  )
+  if (failed) throw new Error(failMsg)
+  return raw
+}
+
+async function repairBlock(
+  llmConfig: LlmConfig,
+  projectPath: string,
+  block: FileBlock,
+  signal: AbortSignal | undefined,
+  onAttempt: (n: number, max: number) => void,
+): Promise<{ content?: string; error?: string }> {
+  let currentContent = block.content
+  const nowTs = nowLocalTimestamp()
+
+  for (let attempt = 0; attempt <= SCHEMA_RETRY_MAX; attempt++) {
+    if (signal?.aborted) return { error: "Cancelled" }
+
+    const parsed = parseFrontmatter(currentContent)
+    const fm = parsed.fm
+    const body = parsed.body
+
+    // Default schema_version
+    if (fm.schema_version == null) fm.schema_version = SCHEMA_VERSION
+
+    // Normalize type
+    if (fm.type) {
+      const norm = normalizeTypeAlias(String(fm.type))
+      if (norm) fm.type = norm
+    } else {
+      fm.type = inferTypeFromPath(block.path)
+    }
+
+    // Default last_reviewed to updated (or now) when missing
+    if (!fm.last_reviewed && fm.updated) fm.last_reviewed = fm.updated
+    if (!fm.created) fm.created = nowTs
+    if (!fm.updated) fm.updated = nowTs
+    if (!fm.last_reviewed) fm.last_reviewed = fm.updated
+
+    // Clean sources
+    if (Array.isArray(fm.sources)) {
+      fm.sources = cleanSources(fm.sources)
+    }
+
+    // Stock code DB override — LLM-written value is discarded
+    if (fm.type === "股票" && typeof fm.title === "string" && fm.title.trim()) {
+      try {
+        const code = await lookupStockCode(projectPath, fm.title.trim())
+        if (code) {
+          fm.code = code
+        } else {
+          delete fm.code
+        }
+      } catch (err) {
+        debugLog("warn", "ingest-stockcode", `Lookup failed for "${fm.title}": ${String(err)}`)
+      }
+    }
+
+    const violations = validate(fm)
+    const fatal = violations.filter((v) => v.fatal)
+
+    // 股票 + DB miss → LLM retry can't help
+    const dbCodeMiss = fm.type === "股票" && fatal.some((v) => v.field === "code")
+    if (dbCodeMiss) {
+      return {
+        error: `DB 中查不到股票 "${fm.title ?? "?"}" 的代码，请在 Settings 刷新股票代码库或检查股票名`,
+      }
+    }
+
+    if (fatal.length === 0) {
+      return { content: serializeFrontmatter(fm as WikiFrontmatter, body) }
+    }
+
+    if (attempt === SCHEMA_RETRY_MAX) {
+      return {
+        error: `Schema 校验 ${SCHEMA_RETRY_MAX} 次重试失败: ${fatal
+          .map((v) => `[${v.field}] ${v.message}`)
+          .join("; ")}`,
+      }
+    }
+
+    const retryNum = attempt + 1
+    onAttempt(retryNum, SCHEMA_RETRY_MAX)
+    debugLog("warn", "ingest-validate", `Retry ${retryNum}/${SCHEMA_RETRY_MAX} for ${block.path}`, {
+      violations: fatal,
+    })
+
+    const type = (fm.type as WikiType) ?? inferTypeFromPath(block.path)
+    const prompt = buildRetryPrompt({ path: block.path, content: currentContent }, fatal, type, retryNum)
+    try {
+      const raw = await runRetryRequest(llmConfig, prompt, signal)
+      const parsedBlocks = parseFileBlocks(raw)
+      currentContent =
+        parsedBlocks.find((b) => b.path === block.path)?.content ??
+        parsedBlocks[0]?.content ??
+        raw
+    } catch (err) {
+      return { error: `重试请求失败: ${err instanceof Error ? err.message : String(err)}` }
+    }
+  }
+  return { error: "max retries exceeded" }
+}
+
+async function repairAndWriteBlocks(
+  llmConfig: LlmConfig,
+  projectPath: string,
+  rawText: string,
+  expectedPath: string | undefined,
+  signal: AbortSignal | undefined,
+  activityId: string | null,
+  planItemIdFor: (path: string) => string | null,
+): Promise<{ written: string[]; errors: Map<string, string> }> {
+  let blocks = parseFileBlocks(rawText)
+  const errors = new Map<string, string>()
+
+  if (expectedPath) {
+    const exact = blocks.filter((b) => b.path === expectedPath)
+    if (exact.length > 0) {
+      blocks = exact
+    } else if (blocks.length === 1) {
+      debugLog("warn", "ingest", `Single FILE block had wrong path, accepting as ${expectedPath}`, {
+        emittedPath: blocks[0].path,
+        expectedPath,
+      })
+      blocks = [{ path: expectedPath, content: blocks[0].content }]
+    } else if (blocks.length === 0) {
+      // Weak LLMs (MiniMax/Kimi) sometimes skip FILE markers entirely.
+      // If the raw output looks like wiki frontmatter+body, treat the
+      // whole response as the intended content for expectedPath.
+      const implicit = tryExtractImplicitBlock(rawText, expectedPath)
+      if (implicit) {
+        debugLog("warn", "ingest", `No FILE marker found, salvaging raw response as ${expectedPath}`, {
+          responseLength: rawText.length,
+          preview: rawText.slice(0, 200),
+        })
+        blocks = [implicit]
+      }
+    } else {
+      blocks = []
+    }
+  }
+
+  const activity = useActivityStore.getState()
+  const finalBlocks: FileBlock[] = []
+
+  for (const block of blocks) {
+    if (!block.path) continue
+    if (isManagedLogPath(block.path)) {
+      errors.set(block.path, "Managed log paths are written by wiki-housekeeping, not LLM file blocks.")
+      continue
+    }
+    const isContentPage =
+      block.path.startsWith("wiki/") && !RESERVED_PATHS.has(block.path)
+    if (!isContentPage) {
+      finalBlocks.push(block)
+      continue
+    }
+    const planItemId = planItemIdFor(block.path)
+    const result = await repairBlock(
+      llmConfig,
+      projectPath,
+      block,
+      signal,
+      (n, max) => {
+        if (activityId && planItemId) {
+          activity.updatePlanItem(activityId, planItemId, { note: `重试中 ${n}/${max}` })
+        }
+      },
+    )
+    if (activityId && planItemId) {
+      activity.updatePlanItem(activityId, planItemId, { note: undefined })
+    }
+    if (result.error) {
+      errors.set(block.path, result.error)
+      continue
+    }
+    finalBlocks.push({ path: block.path, content: result.content! })
+  }
+
+  const written: string[] = []
+  for (const { path: relativePath, content } of finalBlocks) {
+    if (!relativePath) continue
+    const fullPath = `${projectPath}/${relativePath}`
+    try {
+      if (isManagedLogPath(relativePath)) {
+        errors.set(relativePath, "Managed log paths are written by wiki-housekeeping, not LLM file blocks.")
+        continue
+      }
+      await writeFile(fullPath, content)
+      written.push(relativePath)
+    } catch (err) {
+      console.error(`Failed to write ${fullPath}:`, err)
+      errors.set(relativePath, err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  return { written, errors }
+}
+
+/**
+ * Strip wrapping markup from a path string emitted by a weaker LLM.
+ * Handles: **bold**, `backticks`, <angle>, leading/trailing punctuation.
+ */
+function cleanBlockPath(raw: string): string {
+  let p = raw.trim()
+  // Strip paired wrappers: **path**, `path`, <path>, "path", 'path'
+  const pairs: Array<[string, string]> = [["**", "**"], ["`", "`"], ["<", ">"], ['"', '"'], ["'", "'"]]
+  let changed = true
+  while (changed) {
+    changed = false
+    for (const [l, r] of pairs) {
+      if (p.startsWith(l) && p.endsWith(r) && p.length > l.length + r.length) {
+        p = p.slice(l.length, p.length - r.length).trim()
+        changed = true
+      }
+    }
+  }
+  return p
+}
+
+/**
+ * Lenient FILE block parser. Tolerates:
+ * - Missing `---END FILE---` closers (content runs to next start marker or EOF)
+ * - Variable dash counts: `--FILE: ...--`, `----FILE: ...----`
+ * - Path wrappers: `**path**`, `` `path` ``, `<path>`
+ * - Trailing `END FILE` line without matching dash count
+ */
+export function parseFileBlocks(text: string): FileBlock[] {
+  const startRegex = /-{2,}\s*FILE:\s*(.+?)\s*-{2,}\r?\n/g
+  const starts: Array<{ path: string; markerStart: number; contentStart: number }> = []
+  let m: RegExpExecArray | null
+  while ((m = startRegex.exec(text)) !== null) {
+    const path = cleanBlockPath(m[1])
+    if (path) starts.push({ path, markerStart: m.index, contentStart: m.index + m[0].length })
+  }
+
+  const blocks: FileBlock[] = []
+  const endRegex = /-{2,}\s*END\s+FILE\s*-{2,}/i
+  for (let i = 0; i < starts.length; i++) {
+    const { path, contentStart } = starts[i]
+    const sliceEnd = i + 1 < starts.length ? starts[i + 1].markerStart : text.length
+    const segment = text.slice(contentStart, sliceEnd)
+    const endMatch = endRegex.exec(segment)
+    const content = endMatch ? segment.slice(0, endMatch.index).replace(/\r?\n$/, "") : segment.replace(/\r?\n$/, "")
+    blocks.push({ path, content })
+  }
+  return blocks
+}
+
+/**
+ * Fallback for weak LLMs that emit raw frontmatter+body without FILE markers.
+ * Strips outer markdown code fences and verifies the result looks like a
+ * wiki page (starts with `---\n` frontmatter). Returns null if it doesn't
+ * look like wiki content.
+ */
+export function tryExtractImplicitBlock(text: string, expectedPath: string): FileBlock | null {
+  let stripped = text.trim()
+  // Strip outer markdown code fence: ```lang\n...\n```
+  const fenceMatch = /^```[a-zA-Z]*\r?\n([\s\S]*?)\r?\n```$/.exec(stripped)
+  if (fenceMatch) stripped = fenceMatch[1].trim()
+  // Drop a single leading prose line if the model prefixed something like
+  // "Here is the updated content:" before the frontmatter.
+  if (!stripped.startsWith("---")) {
+    const fmStart = stripped.indexOf("\n---\n")
+    if (fmStart >= 0 && fmStart < 300) {
+      stripped = stripped.slice(fmStart + 1).trim()
+    }
+  }
+  if (!stripped.startsWith("---")) return null
+  // Must have a closing frontmatter delimiter on its own line.
+  const closing = stripped.indexOf("\n---", 3)
+  if (closing < 0) return null
+  return { path: expectedPath, content: stripped }
+}
+
+/**
+ * If `expectedPath` is provided, only the FILE block matching it is written.
+ * If no exact-path block exists but exactly one FILE block was emitted, that
+ * block is treated as the intended content and written to expectedPath.
+ * Otherwise, all FILE blocks are written.
+ */
+async function writeFileBlocks(
+  projectPath: string,
+  text: string,
+  expectedPath?: string,
+): Promise<string[]> {
+  const writtenPaths: string[] = []
+  let blocks = parseFileBlocks(text)
+
+  if (expectedPath) {
+    const exact = blocks.filter((b) => b.path === expectedPath)
+    if (exact.length > 0) {
+      blocks = exact
+    } else if (blocks.length === 1) {
+      // LLM emitted one block with a different/missing path — accept as intended content
+      debugLog("warn", "ingest", `Single FILE block had wrong path, accepting as ${expectedPath}`, {
+        emittedPath: blocks[0].path,
+        expectedPath,
+      })
+      blocks = [{ path: expectedPath, content: blocks[0].content }]
+    } else {
+      blocks = []
+    }
+  }
+
+  for (const { path: relativePath, content } of blocks) {
+    if (!relativePath) continue
+    const fullPath = `${projectPath}/${relativePath}`
+    try {
+      if (isManagedLogPath(relativePath)) {
+        debugLog("warn", "ingest", `Skipping managed log path emitted by LLM: ${relativePath}`)
+        continue
+      }
+      await writeFile(fullPath, content)
+      writtenPaths.push(relativePath)
+    } catch (err) {
+      console.error(`Failed to write ${fullPath}:`, err)
+    }
+  }
+
+  return writtenPaths
+}
+
+const REVIEW_BLOCK_REGEX = /---REVIEW:\s*(\w[\w-]*)\s*\|\s*(.+?)\s*---\n([\s\S]*?)---END REVIEW---/g
+
+function parseReviewBlocks(
+  text: string,
+  sourcePath: string,
+): Omit<ReviewItem, "id" | "resolved" | "createdAt">[] {
+  const items: Omit<ReviewItem, "id" | "resolved" | "createdAt">[] = []
+  const matches = text.matchAll(REVIEW_BLOCK_REGEX)
+
+  for (const match of matches) {
+    const rawType = match[1].trim().toLowerCase()
+    const title = match[2].trim()
+    const body = match[3].trim()
+
+    const type = (
+      ["contradiction", "duplicate", "missing-page", "suggestion"].includes(rawType)
+        ? rawType
+        : "confirm"
+    ) as ReviewItem["type"]
+
+    const optionsMatch = body.match(/^OPTIONS:\s*(.+)$/m)
+    const options = optionsMatch
+      ? optionsMatch[1].split("|").map((o) => {
+          const label = o.trim()
+          return { label, action: label }
+        })
+      : [
+          { label: "Approve", action: "Approve" },
+          { label: "Skip", action: "Skip" },
+        ]
+
+    const pagesMatch = body.match(/^PAGES:\s*(.+)$/m)
+    const affectedPages = pagesMatch
+      ? pagesMatch[1].split(",").map((p) => p.trim())
+      : undefined
+
+    const searchMatch = body.match(/^SEARCH:\s*(.+)$/m)
+    const searchQueries = searchMatch
+      ? searchMatch[1].split("|").map((q) => q.trim()).filter((q) => q.length > 0)
+      : undefined
+
+    const description = body
+      .replace(/^OPTIONS:.*$/m, "")
+      .replace(/^PAGES:.*$/m, "")
+      .replace(/^SEARCH:.*$/m, "")
+      .trim()
+
+    items.push({
+      type,
+      title,
+      description,
+      sourcePath,
+      affectedPages,
+      searchQueries,
+      options,
+    })
+  }
+
+  return items
 }
 
 function getStore() {
@@ -513,6 +1785,18 @@ async function tryReadFile(path: string): Promise<string> {
   } catch {
     return ""
   }
+}
+
+async function readProjectSchema(projectPath: string): Promise<string> {
+  const rootSchema = await tryReadFile(`${projectPath}/schema.md`)
+  if (rootSchema.trim()) return rootSchema
+  return tryReadFile(`${projectPath}/wiki/schema.md`)
+}
+
+async function readProjectPurpose(projectPath: string): Promise<string> {
+  const rootPurpose = await tryReadFile(`${projectPath}/purpose.md`)
+  if (rootPurpose.trim()) return rootPurpose
+  return tryReadFile(`${projectPath}/wiki/purpose.md`)
 }
 
 export async function startIngest(
@@ -531,8 +1815,8 @@ export async function startIngest(
 
   const [sourceContent, schema, purpose, index] = await Promise.all([
     tryReadFile(sp),
-    tryReadFile(`${pp}/wiki/schema.md`),
-    tryReadFile(`${pp}/wiki/purpose.md`),
+    readProjectSchema(pp),
+    readProjectPurpose(pp),
     tryReadFile(`${pp}/wiki/index.md`),
   ])
 
@@ -603,7 +1887,7 @@ export async function executeIngestWrites(
   const store = getStore()
 
   const [schema, index] = await Promise.all([
-    tryReadFile(`${pp}/wiki/schema.md`),
+    readProjectSchema(pp),
     tryReadFile(`${pp}/wiki/index.md`),
   ])
 
@@ -614,97 +1898,88 @@ export async function executeIngestWrites(
   const writePrompt = [
     "Based on our discussion, please generate the wiki files that should be created or updated.",
     "",
-    LANGUAGE_RULE,
-    "",
-    "## Output Format",
-    "",
-    "Output each wiki file in this exact format:",
-    "",
-    "---FILE: wiki/path/filename.md---",
-    "(complete file content with YAML frontmatter)",
-    "---END FILE---",
-    "",
-    "Generate:",
-    "1. A source summary page at wiki/sources/{filename}.md",
-    "2. Entity/concept/strategy/stock pages in the appropriate wiki subdirectory",
-    "3. An updated wiki/index.md — add new entries, preserve existing ones",
-    "4. A log entry for wiki/log.md",
-    "5. An updated wiki/overview.md",
-    "",
-    "## Frontmatter Rules (CRITICAL)",
-    "",
-    "Every page MUST have YAML frontmatter with these fields:",
-    "```yaml",
-    "---",
-    "type: source | 股票 | 策略 | 模式 | 错误 | 市场环境 | 进化 | 总结 | 预测",
-    "title: Human-readable title",
-    "created: YYYY-MM-DD",
-    "updated: YYYY-MM-DD",
-    "tags: []",
-    "related: []",
-    "sources: []  # MUST contain the original source filename",
-    "confidence_grade: B  # A/B/C/D/E",
-    "confidence_reason: 基于2份来源的分析",
-    "---",
-    "```",
-    "",
-    "Other rules:",
-    "- Use [[wikilink]] syntax for cross-references between pages",
-    "- Use kebab-case filenames",
-    "- Follow the analysis recommendations on what to emphasize",
+    userGuidance ? `Additional guidance: ${userGuidance}` : "",
     "",
     schema ? `## Wiki Schema\n${schema}` : "",
     index ? `## Current Wiki Index\n${index}` : "",
-    userGuidance ? `## User Guidance\n${userGuidance}` : "",
-  ].filter(Boolean).join("\n")
-
-  const messages = [
-    { role: "system" as const, content: writePrompt },
-    ...conversationHistory,
+    "",
+    "Output ONLY the file contents in this exact format for each file:",
+    "```",
+    "---FILE: wiki/path/to/file.md---",
+    "(file content here)",
+    "---END FILE---",
+    "```",
+    "",
+    "Do not output wiki/log.md or wiki/logs/**. Logs are managed by the app housekeeping layer.",
+    "Output the complete file content for every wiki page you do emit.",
+    "Use relative paths from the project root (e.g., wiki/sources/topic.md).",
+    "Do not include any other text outside the FILE blocks.",
   ]
+    .filter((line) => line !== undefined)
+    .join("\n")
 
-  let generation = ""
+  conversationHistory.push({ role: "user", content: writePrompt })
 
-  store.setStreaming(true)
+  let accumulated = ""
+
+  const systemPrompt = [
+    "You are a wiki generation assistant. Your task is to produce structured wiki file contents.",
+    "",
+    LANGUAGE_RULE,
+    schema ? `## Wiki Schema\n${schema}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n")
 
   try {
     await streamChat(
       llmConfig,
-      messages,
+      [{ role: "system", content: systemPrompt }, ...conversationHistory],
       {
         onToken: (token) => {
-          generation += token
-          getStore().appendStreamToken(token)
+          accumulated += token
         },
-        onDone: () => {
-          getStore().finalizeStream(generation)
-        },
+        onDone: () => {},
         onError: (err) => {
-          getStore().finalizeStream(`Error during write: ${err.message}`)
+          throw err
         },
       },
       signal,
     )
-  } finally {
-    store.setStreaming(false)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    store.addMessage("system", `Wiki write failed: ${message}`)
+    throw err
   }
 
-  // Write files
-  let writtenPaths: string[] = []
-  try {
-    writtenPaths = await writeFileBlocks(pp, generation)
-  } catch (err) {
-    console.error("Failed to write wiki files:", err)
+  const writtenPaths: string[] = []
+  const blocks = parseFileBlocks(accumulated)
+
+  for (const block of blocks) {
+    const relativePath = block.path
+    const content = block.content
+
+    if (!relativePath) continue
+
+    const fullPath = `${pp}/${relativePath}`
+
+    try {
+      if (isManagedLogPath(relativePath)) {
+        debugLog("warn", "ingest", `Skipping managed log path emitted by LLM: ${relativePath}`)
+        continue
+      }
+      await writeFile(fullPath, content)
+      writtenPaths.push(fullPath)
+    } catch (err) {
+      console.error(`Failed to write ${fullPath}:`, err)
+    }
   }
 
   if (writtenPaths.length > 0) {
-    try {
-      const tree = await listDirectory(pp)
-      useWikiStore.getState().setFileTree(tree)
-      useWikiStore.getState().bumpDataVersion()
-    } catch {
-      // ignore
-    }
+    const fileList = writtenPaths.map((p) => `- ${p}`).join("\n")
+    getStore().addMessage("system", `Files written to wiki:\n${fileList}`)
+  } else {
+    getStore().addMessage("system", "No files were written. The LLM response did not contain valid FILE blocks.")
   }
 
   return writtenPaths

@@ -1,6 +1,6 @@
 [package]
 name = "trading-review-wiki"
-version = "0.8.0"
+version = "0.10.5"
 description = "Trading Review Wiki - A personal trading knowledge base powered by LLM"
 authors = []
 edition = "2021"
@@ -38,6 +38,8 @@ arrow-schema = "57"
 futures = "0.3"
 rand = "0.8"
 reqwest = { version = "0.12", features = ["json"] }
+tokio-postgres = "0.7"
+walkdir = "2"
 
 [profile.release]
 codegen-units = 1

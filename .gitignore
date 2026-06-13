@@ -1,6 +1,9 @@
 # Dependencies
 node_modules/
 
+# Local toolchain cache (start.ps1 自动下载的 protoc 等)
+.cache/
+
 # Build outputs
 dist/
 dist-ssr/
@@ -18,6 +21,8 @@ src-tauri/gen/
 
 # Internal docs (not shipped)
 docs/
+!docs/
+!docs/temporal-facts-v1.md
 
 # Benchmark and test data (local only)
 tests/

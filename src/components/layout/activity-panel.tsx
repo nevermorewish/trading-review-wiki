@@ -4,7 +4,8 @@ import {
   FileText, Users, Lightbulb, BookOpen, GitMerge, BarChart3, HelpCircle, Layout,
   RotateCcw, X, Clock,
 } from "lucide-react"
-import { useActivityStore, type ActivityItem } from "@/stores/activity-store"
+import { useActivityStore, type ActivityItem, type PlanItem, type IngestStage } from "@/stores/activity-store"
+import { Plus, Pencil } from "lucide-react"
 import { useWikiStore } from "@/stores/wiki-store"
 import { normalizePath, getFileName } from "@/lib/path-utils"
 import { getQueue, getQueueSummary, retryTask, cancelTask, type IngestTask } from "@/lib/ingest-queue"
@@ -246,27 +247,153 @@ function ActivityRow({ item, onCancel }: { item: ActivityItem; onCancel?: () => 
         )}
       </div>
 
-      {/* File list with types */}
-      {item.filesWritten.length > 0 && item.status === "done" && (
-        <div className="mt-1.5 ml-5 flex flex-col gap-0.5">
-          {item.filesWritten.map((filePath) => {
-            const { icon: Icon, type } = getFileTypeInfo(filePath)
-            const fileName = getFileName(filePath)
+      {/* Stage groups: Step 1/2 are header-only; Step 3 lists updates; Step 4 lists creates + housekeeping */}
+      {item.stages && item.stages.length > 0 && (
+        <div className="mt-1.5 ml-5 flex flex-col gap-1">
+          {item.stages.map((stage) => {
+            const planItems = (item.plan ?? []).filter((p) => {
+              // Backwards compat: items without explicit stage fall back to action-based
+              if (p.stage !== undefined) return p.stage === stage.step
+              if (stage.step === 3) return p.action === "update"
+              if (stage.step === 4) return p.action === "create"
+              return false
+            })
             return (
-              <button
-                key={filePath}
-                type="button"
-                onClick={() => handleFileClick(filePath)}
-                className="flex items-center gap-1.5 rounded px-1 py-0.5 text-left text-muted-foreground hover:bg-accent/50 hover:text-foreground transition-colors"
-              >
-                <Icon className="h-3 w-3 shrink-0" />
-                <span className="text-[10px] font-medium text-muted-foreground/70 w-14 shrink-0">{type}</span>
-                <span className="truncate">{fileName}</span>
-              </button>
+              <StageRow
+                key={stage.step}
+                stage={stage}
+                planItems={planItems}
+                onPlanItemClick={handleFileClick}
+              />
             )
           })}
         </div>
       )}
+
+      {/* Fallback: plan items without stages (legacy path) */}
+      {(!item.stages || item.stages.length === 0) && item.plan && item.plan.length > 0 && (
+        <div className="mt-1.5 ml-5 flex flex-col gap-0.5">
+          {item.plan.map((p) => (
+            <PlanItemRow key={p.id} planItem={p} onClick={() => handleFileClick(p.path)} />
+          ))}
+        </div>
+      )}
+
+      {/* File list (only shown when no plan exists — e.g. cache hit) */}
+      {(!item.plan || item.plan.length === 0) &&
+        item.filesWritten.length > 0 &&
+        item.status === "done" && (
+          <div className="mt-1.5 ml-5 flex flex-col gap-0.5">
+            {item.filesWritten.map((filePath) => {
+              const { icon: Icon, type } = getFileTypeInfo(filePath)
+              const fileName = getFileName(filePath)
+              return (
+                <button
+                  key={filePath}
+                  type="button"
+                  onClick={() => handleFileClick(filePath)}
+                  className="flex items-center gap-1.5 rounded px-1 py-0.5 text-left text-muted-foreground hover:bg-accent/50 hover:text-foreground transition-colors"
+                >
+                  <Icon className="h-3 w-3 shrink-0" />
+                  <span className="text-[10px] font-medium text-muted-foreground/70 w-14 shrink-0">{type}</span>
+                  <span className="truncate">{fileName}</span>
+                </button>
+              )
+            })}
+          </div>
+        )}
     </div>
+  )
+}
+
+function StageRow({
+  stage,
+  planItems,
+  onPlanItemClick,
+}: {
+  stage: IngestStage
+  planItems: PlanItem[]
+  onPlanItemClick: (path: string) => void
+}) {
+  const doneCount = planItems.filter((p) => p.status === "done").length
+  const failCount = planItems.filter((p) => p.status === "error").length
+  const total = planItems.length
+
+  let summary = ""
+  if (total > 0) {
+    summary = `${doneCount}/${total}`
+    if (failCount > 0) summary += ` · ${failCount} 失败`
+  }
+
+  return (
+    <div className="flex flex-col gap-0.5">
+      <div className="flex items-center gap-1.5 text-[11px]" title={stage.error ?? ""}>
+        <div className="shrink-0">
+          {stage.status === "pending" && <Clock className="h-3 w-3 text-muted-foreground/60" />}
+          {stage.status === "running" && <Loader2 className="h-3 w-3 animate-spin text-primary" />}
+          {stage.status === "done" && <CheckCircle2 className="h-3 w-3 text-emerald-500" />}
+          {stage.status === "error" && <AlertCircle className="h-3 w-3 text-destructive" />}
+        </div>
+        <span className="font-medium text-muted-foreground/80">Step {stage.step}/4</span>
+        <span className="text-foreground">{stage.label}</span>
+        {summary && <span className="text-muted-foreground/60">· {summary}</span>}
+        {stage.error && stage.status === "error" && (
+          <span className="text-destructive truncate">— {stage.error}</span>
+        )}
+      </div>
+      {planItems.length > 0 && (
+        <div className="ml-4 flex flex-col gap-0.5">
+          {planItems.map((p) => (
+            <PlanItemRow key={p.id} planItem={p} onClick={() => onPlanItemClick(p.path)} />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function PlanItemRow({ planItem, onClick }: { planItem: PlanItem; onClick: () => void }) {
+  const ActionIcon =
+    planItem.action === "create" ? Plus :
+    planItem.action === "append" ? FileText :
+    Pencil
+  const actionLabel =
+    planItem.action === "create" ? "新建" :
+    planItem.action === "append" ? "追加" :
+    "更新"
+  const actionColor =
+    planItem.action === "create" ? "text-emerald-600" :
+    planItem.action === "append" ? "text-amber-600" :
+    "text-blue-600"
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="flex items-start gap-1.5 rounded px-1 py-0.5 text-left text-muted-foreground hover:bg-accent/50 hover:text-foreground transition-colors"
+      title={planItem.error ?? planItem.why ?? ""}
+    >
+      <div className="mt-0.5 shrink-0">
+        {planItem.status === "pending" && <Clock className="h-3 w-3 text-muted-foreground/60" />}
+        {planItem.status === "running" && <Loader2 className="h-3 w-3 animate-spin text-primary" />}
+        {planItem.status === "done" && <CheckCircle2 className="h-3 w-3 text-emerald-500" />}
+        {planItem.status === "error" && <AlertCircle className="h-3 w-3 text-destructive" />}
+      </div>
+      <ActionIcon className={`mt-0.5 h-3 w-3 shrink-0 ${actionColor}`} />
+      <span className={`text-[10px] font-medium w-7 shrink-0 ${actionColor}`}>{actionLabel}</span>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-1.5 min-w-0">
+          <span className="truncate">{planItem.path}</span>
+          {planItem.note && (
+            <span className="shrink-0 rounded-sm bg-amber-100 px-1 py-0.5 text-[9px] font-medium text-amber-700 dark:bg-amber-950 dark:text-amber-300">
+              {planItem.note}
+            </span>
+          )}
+        </div>
+        {planItem.status === "error" && planItem.error && (
+          <div className="text-[10px] text-destructive truncate">{planItem.error}</div>
+        )}
+      </div>
+    </button>
   )
 }

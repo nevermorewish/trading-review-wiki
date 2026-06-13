@@ -7,7 +7,6 @@ import { useWikiStore } from "@/stores/wiki-store"
 import { readFile, listDirectory } from "@/commands/fs"
 import type { FileNode } from "@/types/wiki"
 import { normalizePath } from "@/lib/path-utils"
-import { extractFrontmatterData, getConfidenceDisplay, getStatusDisplay } from "@/lib/frontmatter"
 
 interface WikiPageInfo {
   path: string
@@ -15,8 +14,6 @@ interface WikiPageInfo {
   type: string
   tags: string[]
   origin?: string
-  confidence?: number
-  status?: string
 }
 
 const TYPE_CONFIG: Record<string, { icon: typeof FileText; label: string; color: string; order: number }> = {

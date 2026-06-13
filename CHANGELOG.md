@@ -4,52 +4,255 @@
 
 ---
 
-## v0.8.0 — 2026-05-08
+## v0.10.5-codex-cli — 2026-06-13
 
-### 修复（Bug Fix）
+> Codex CLI 分支专项 checkpoint：加入轻量 Graphiti-style Temporal Facts v1 层，把摄入、检索和审计从“静态页面更新”推进到“可追踪当前有效事实、历史反证和概念归一候选”的可回滚 CLI 能力。本版只做本地 checkpoint，不包含 release tag 或发布脚本。
 
-- **修复 `A?.trim is not a function` 导致应用白屏**：`chat-message.tsx` 中 `processContent` 函数的 wikilink 正则表达式捕获组丢失（从2个变为1个），导致 `pageName` 参数实际是显示文本或 undefined，`.trim()` 调用报错。已恢复正确的2个捕获组正则，并添加更安全的空值处理。
-- **修复 Save to Wiki 覆盖已有文件**：原逻辑每次保存都直接覆盖写入，导致历史内容丢失。已改为先读取已有文件，在 body 末尾追加新内容并更新 `updated` 日期。
-- **修复索引重复**：同名文件多次保存时，`index.md` 中重复添加相同链接。已添加去重逻辑，已有链接跳过不重复添加。
-- **修复同批次追加逻辑竞态条件**：`listDirectory` 缓存延迟可能导致同批次第二次保存时错误生成 `-1` 后缀文件。已改为同批次内始终使用原文件名追加。
-- **修复保存失败无用户提示**：错误只在控制台输出，用户看不到。已添加 `alert()` 弹窗提示保存失败原因。
+### 新功能（Feature）
 
-### 改进（Improvement）
-
-- **Save to Wiki 文件名去掉日期后缀**：文件名从 `${slug}-${date}.md` 改为 `${slug}.md`，同名文件跨天追加到同一个文件，避免碎片化。
-- **追加内容带时间戳**：追加时在内容前添加 `## 更新于 2026-05-08 10:30` 时间戳标题，便于追溯每次更新。
-- **frontmatter 统一完整格式**：新增 `sources: 0` 和 `status: 活跃` 字段，与 schema 规范保持一致。
-- **错误边界增强**：`ErrorBoundary` 组件现在显示完整的 Stack Trace 和 Component Stack，便于调试。
-
----
-
-## v0.7.8 — 2026-05-07
-
-### 修复（Bug Fix）
-
-- **修复 `A?.trim is not a function` 导致应用白屏**：`chat-message.tsx` 中 `processContent` 函数的 `String.prototype.replace` 回调里，`pageName` 参数类型标注为 `string`，但正则捕获组未匹配时实际为 `undefined`。调用 `undefined.trim()` 抛出 `TypeError`，导致应用启动时白屏。已将类型改为 `string | undefined` 并用 `?? ""` 兜底。
-
----
-
-## v0.7.7 — 2026-05-07
-
-### 修复（Bug Fix）
-
-- **修复 Save to Wiki 多页面拆分失败**：`chat-message.tsx` 中正则表达式 `/^---\n([\s\S]*?)\n---\n/` 会跨页面贪婪匹配，导致 AI 回复中包含多个 `---` 分隔的独立页面时，被当成一个 frontmatter 块处理，只生成一个文件。已添加 `splitMultiPageContent()` 函数，使用非贪婪正则逐页拆分，并验证每页 frontmatter 至少含一个 `key: value` 行，避免误识别 markdown 分隔线。
-- **修复同批次文件名冲突**：同一批次保存多个页面时，若标题相同会生成相同文件名导致覆盖。已添加 `batchCreatedNames` Map 跟踪本批次已创建的文件名，自动递增序号（`-1`、`-2`…）。
-- **修复 index.md/log.md 并发写入冲突**：多页面保存时并发读写 `index.md` 和 `log.md` 导致内容交错或丢失。已改为收集所有条目后批量一次性写入。
-- **修复部分失败时中断整个保存流程**：某个页面写入失败时，`continue` 会跳过剩余页面的 index/log 更新。已添加 `failedPages` 收集失败项，成功页面继续处理 index/log。
-- **修复 autoIngest Promise rejection 未完全兜底**：`autoIngest().catch()` 只捕获异步 rejection，同步抛异常时未被处理。已改为 `try/await/catch` 结构。
-- **修复 splitMultiPageContent 正则拒绝 frontmatter 空行**：原正则要求每行必须是 `key: value`，不允许空行。已放宽为允许空行，匹配后单独验证是否含至少一个 `key: value`。
-- **修复 search.ts Windows 路径混合分隔符**：`raw/` 文件分组时使用 `Math.max(lastIndexOf("/"), lastIndexOf("\\"))`，Windows 路径混用 `\` 和 `/` 时分组错误。已统一用 `.replace(/\\/g, "/")` 标准化后再处理。
-- **修复 getRefType 缺少中文目录映射**：`CitedReferencesPanel` 中 `getRefType()` 只识别英文目录（entities/、concepts/ 等），中文目录（股票/、策略/、预测/ 等）全部 fallback 为 "source"。已补充所有中文目录的映射规则。
-- **修复 indexContent.replace 正则未转义**：`sectionHeader` 含特殊字符（如 `## 快速导航` 中的 `##`）时，直接拼入 `new RegExp()` 导致语法错误。已先 escape 特殊字符。
-- **修复 fileTitle 双引号转义不完整**：`title: "${fileTitle.replace(/"/g, '\\"')}"` 未处理反斜杠，若标题含 `\` 会导致 YAML 解析错误。已改为先转义 `\` 再转义 `"`。
+- **Temporal Facts v1 账本**：新增 `data/facts/temporal_edges.jsonl` 写入目标和 `factWrites` manifest 区域，摄入时把时序事实与正式 wiki 页面写入分离，避免事实边混入 `writes`。
+- **时序事实 apply 支持**：`applyManifest` 支持 dry-run 和 write-mode 的 `plannedFactWrites`、`duplicateFacts`、`supersededFacts`、`invalidatedFacts`、`factsWritten` 与 fact index 重建；确定性 fact id 可防止重复追加。
+- **当前事实检索视图**：`ask` 默认只把 active/current facts 作为普通 `[F]` 证据；`superseded`、`invalidated`、`expired` 默认只作为历史/反证，不污染主证据。
+- **`--include-invalidated` 审计开关**：`ask` 和 `ask eval` 新增 `--include-invalidated`，用于审计式问题显式查看失效、替代和反证事实。
+- **`temporal-facts audit` 命令**：新增 `npm run codex:ingest -- temporal-facts audit`，从现有 `wiki/**/*.md` 提取 Predicate / Alias / Tag / Abbreviation 候选，并把人工裁决、tag 晋升、缩写白黑名单和概念层级规则写入 `.llm-wiki/temporal-facts/` 报告。
 
 ### 改进（Improvement）
 
-- **新增预测目录支持**：`templates.ts` 的 `tradingTemplate.extraDirs` 追加 `"wiki/预测"`，`schema.md` 和 `ingest.ts` 的 frontmatter 类型枚举同步加入 `预测` 类型，AI 生成的预测内容现在正确写入 `wiki/预测/` 而非 `queries/`。
-- **优化 raw 文件检索配额**：`search.ts` 中 `raw/` 文件不再全局取前 20 个，改为按子目录分组（日复盘/交割单/研报/微信聊天），每组按日期倒序取前 10 个，确保各类原始资料都有机会进入上下文。
+- **Predicate 词表细分**：在原有 `HAS_ORDER`、`HAS_VALIDATION_SIGNAL`、`HAS_RISK` 基础上增加订单事实强度、价格/量/客户/技术/基本面验证，以及澄清、竞争、需求、供应链、估值风险等细分 predicate。
+- **概念别名审计降噪**：Alias 只保留 frontmatter aliases、标题拆分和括号同义；tags 与正文缩写拆成独立候选，避免 `国产替代`、`AI`、`Call` 等泛词制造假冲突。
+- **Plan budget 软告警**：`--max-plan-items`、`--max-create-pages`、`--max-update-pages` 改为写入 `plan-budget.json` 的软告警，不阻断正常多页面摄入。
+- **Temporal Fact Context 进入 prepare/api-run**：ingest context 现在会提供 entity candidates、related facts 和 segment-level fact seeds，帮助后续来源引用旧 fact、补充 supersedes/invalidates/contradicts。
+- **文档化 v1 边界**：新增 `docs/temporal-facts-v1.md`，记录字段、predicate/status/evidence/sourceKind、反证替代、人工复核、回填优先级、别名维护和暂不做项。
+
+### 安全边界（Safety）
+
+- `ingest/apply` 仍然不写 `raw/**`。
+- `writes` 仍限制在正式 wiki markdown 和每日分片日志；旧 `wiki/log.md` 禁止写入。
+- `factWrites` 只能写 `data/facts/temporal_edges.jsonl`，不能写任意 facts 路径。
+- C/D 证据可以作为待验证 active，但会保留弱证据 warning，不能被写成确认事实。
+
+### 验证（Validation）
+
+- `npm test -- --run scripts/codex-ingest-lib.test.mjs` 通过。
+- `npm test -- --run` 通过。
+- `git diff --check` 通过。
+
+---
+
+## v0.10.4-codex-cli — 2026-06-08
+
+> Codex CLI 分支专项更新：把 Trading Review Wiki 从“桌面知识库 + 摄入工具”推进到“交易研究自动化 CLI”。本版重点是多源 RAG、schema-aware 检索、raw 去噪、ingest 候选分段召回、股票 SQL 量价验证、daily-loop 锚定验证、vector 维护和 wiki housekeeping。
+
+### 新功能（Feature）
+
+- **多源 RAG 问答完整化**：[`scripts/codex-ingest-lib.mjs::buildAskRetrievalContext/askWiki`] `ask` 现在统一支持 `wiki_pages`、`raw_text`、`wiki_graph`、`facts_jsonl`、`brain_memory`、`stock_daily_sql` 六类 source。source routing 先走规则识别，再可选调用 LLM source router，最后按 required sources + LLM 推荐 + 规则分数融合。答案 prompt 统一编号为 `W/R/G/F/M/S`，要求输出固定六段：结论、证据链、分歧/反证、后续验证、交易含义、引用来源。
+- **多源检索 RAG 完整流程文档**：新增 [`docs/多源检索RAG完整流程.md`](docs/多源检索RAG完整流程.md)，系统性说明 `tw-ask.sh -> codex-ingest ask -> askWiki -> buildAskRetrievalContext -> buildAskPrompt` 的完整链路，覆盖 source 注册、source routing、wiki/raw/graph/facts/brain/SQL、prompt 组装、vector 位置、ask 与 ingest 差异和调试命令。
+- **Stock Daily SQL native source**：[`scripts/codex-ingest-lib.mjs::searchAskStockDaily/buildStockDailySqlQuery/buildStockDailyMarketValidation`] 新增只读 PostgreSQL 日线源，默认表为 `cn_stock_db.public.cn_stock_price_daily_wind`。能从 query 解析股票名/代码和近 N 日意图，生成只读 SQL，返回 `S1/S2/...` 证据，并计算 Market Validation：区间收益、首尾收盘价、均量、末日量能、成交额和验证结论。
+- **Facts / Brain JSONL native source**：[`searchAskFacts/searchAskBrain`] `data/facts/*.jsonl` 和 `data/brain/*.jsonl` 进入 ask 原生检索。facts 用于案例、观察、事实、验证；brain 用于长期纠错、偏好、卫语句、预测与验证记忆。Brain Memory 明确只能作为先验和约束，不能单独证明市场事实。
+- **Ask eval 检索质量评估**：[`runAskEval`] 新增/增强 `ask eval`，可用 `--expect-paths` 检查 recall、evidence coverage、raw noise、structure field coverage 等指标，用于回归验证检索质量。
+- **Daily-loop 锚定验证**：[`daily-loop` 相关逻辑] 盘后 pending validation 从 `prediction.createdAt/answeredAt/date` 后的第一个交易日开始验证，保留 `validationStartDate`、`validationEndDate`、`horizonTrackKey`、`priorWindowDays`、`validationMethod="first_trading_day_after_prediction_v1"` 等字段，避免 1/3/5/10/20 日窗口互相覆盖。
+- **Vector store 维护命令**：[`src-tauri/src/commands/vectorstore.rs`、`src/lib/embedding.ts`] 增加 LanceDB 向量库维护能力，支持统计、清理、删除和重建辅助。向量检索仍定位为 semantic boost，不是 CLI ask 的唯一真相源。
+- **Wiki housekeeping 日志**：[`src/lib/wiki-housekeeping.ts`] 新增每日 housekeeping log 机制，降低 `wiki/log.md` 和根目录日志膨胀风险，让知识库操作记录更适合长期维护。
+
+### 改进（Improvement）
+
+- **正式 wiki frontmatter 作为一等召回层**：[`scoreFrontmatterStructure/frontmatterSearchText`] `title`、`aliases`、`tags`、`related`、`sources`、`summary`、`type` 都进入结构化加权；`概念/股票/错误/模式/策略` 等更贴近交易研究的页面类型有额外权重。正式 wiki 不再被 raw 噪声压住。
+- **Frontmatter 新鲜度参与 ask 排序**：[`frontmatterFreshnessScore`] ask 模式读取 `updated / last_reviewed / created` 的最新有效时间。查询含“最新/最近/订单/进展/业绩/公告/量价”等时间敏感词时，近期页面获得更强加分；`概念/股票/总结/源文档/查询` 超过 180/365 天会温和降权；`策略/模式/错误` 等稳定经验页不重罚。`--show-context` 暴露 `frontmatterUpdated`、`frontmatterUpdatedField`、`staleDays`、`freshnessScore` 方便诊断。
+- **有界多跳图谱扩展**：[`expandAskGraph/resolveAskGraphDepth`] `wiki_graph` 从固定一跳升级为有界扩展。默认仍是一跳；查询含“产业链/上下游/受益方向/扩散/映射/供应商/客户”等词时自动二跳，也支持 `--graph-depth 1|2|auto`。二跳结果做分数衰减、query relevance 过滤和 hub 节点截断，并在 prompt / `--show-context` 中输出 `graph_hop`、`path_trace`、`hop/pathTrace`，明确二跳只能作为关系线索。
+- **Wiki 牵引 raw 原始证据**：[`boostRawResultsByWikiStructure`] top wiki 页面的 frontmatter `sources` 会反向 boost 对应 raw 文件，并记录 `structuredSourceMatch`。这让正式页和原始资料形成证据链，而不是两套孤立召回。
+- **Raw 检索安全策略**：[`filterRawFilesByQueryPolicy`] ask 模式下 raw 默认按日期新鲜度限量扫描；query 带 `YYYY-MM-DD` 时优先扫对应日期；微信聊天等噪声路径在 ask 模式下降权。ingest 模式则保留更宽召回，避免漏候选。
+- **Ingest 候选分段召回**：[`extractSourceTokens/searchIngestCandidates`] 长源、多主题 OpenClaw/Gangtise/微信 sentiment 资料现在按主题 token 和 heading 分段召回，避免一个长文件只召回最强主题而漏掉后半段重要链条。
+- **Ingest token 排名收紧**：[`extractSourceTokens`] 新增对中文长短语、路径噪声、日期、通用字段名、无意义英文 token 的过滤和权重排序，减少 `content/source/theme/date` 等泛词污染候选集。
+- **Schema-aware ask 与 ingest 检索硬化**：[`scripts/codex-ingest-lib.mjs`、`src/lib/search.ts`、`src/lib/templates.ts`] 检索层更尊重 Schema v1 页面结构，区分 ask 与 ingest 的召回目标：ask 偏去噪和够用，ingest 偏广召回和不漏候选。
+- **Programmatic housekeeping merge**：[`scripts/codex-ingest-lib.mjs`、`src/lib/ingest.ts`] ingest 后的 index/overview/log 等 housekeeping 合并更程序化，减少 LLM 大段重写导致目录页损坏或缩水。
+- **Keychain 自动加载 SQL 密码**：[`scripts/tw-ask.sh`、`scripts/codex-ingest-lib.mjs`] 当 `PG_SHIHAO_PASSWORD` 未设置时，`tw-ask.sh` 可从 macOS Keychain 的 `trading-wiki-cn-stock-db / shihao` 读取股票 SQL 密码，并注入默认 host/port/user/database/schema/table。文档和输出均不打印密码。
+- **Daily-loop 多源市场验证**：[`marketValidation`] 本地 SQL 与外部 Tencent K-line 交叉验证成为 daily-loop 可观测字段，状态包括 `confirmed`、`sql_stale`、`divergent`、`sql_only`、`external_only`、`unavailable`，避免单一源滞后造成错误结论。
+
+### 修复（Bug Fix）
+
+- **修复 stock-price 问题源路由不稳定**：股票名/代码 + 量价关键词会强制纳入 `stock_daily_sql`；SQL 不可用或未解析出 ticker 时返回 evidence insufficiency，不再编造价格事实。
+- **修复 ask 被 raw 噪声淹没**：raw 在 ask 模式下加扫描上限、日期 hint、路径质量权重和微信聊天降权；正式 wiki 的结构字段召回优先级提高。
+- **修复 ingest 对长源多主题漏召回**：分段 token seed 和主题短语提取后，机器人、AI 应用、算力、电力等混合资料不再只召回单一主题。
+- **修复 validation window 语义被压扁**：多窗口验证保留 horizon track，短窗口是快速反馈，长窗口是持续性和归因修正，不再简单以后者覆盖前者。
+- **修复 source routing 失败时不可诊断**：`--show-sources` 和 `--show-context` 输出 source routing、native queries、retrieval warnings、SQL status 和各源命中，便于定位是源不可用、召回不足还是证据本身缺口。
+
+### 验证（Validation）
+
+- `npm test -- --run` 通过：11 个测试文件，214 个测试。
+- 新增/增强测试覆盖：source routing、facts JSONL、brain memory、stock SQL、graph expansion、ask eval、schema-aware retrieval、segmented ingest candidate retrieval、anchored daily-loop validation。
+
+---
+
+## v0.10.3 — 2026-05-12
+
+> 用户反馈 Save to Wiki 偶发 `LLM returned no FILE block` 失败，使用 MiniMax 时频率显著高于 GPT 5.5。根因是 FILE block 解析器对 marker 格式要求过严（精确 3 短横线、精确 `---FILE:` 头、必须紧跟换行），弱指令模型会输出 `----FILE: path----`、`**path**`、外包 markdown code fence、甚至完全忘了 FILE marker 直接吐 frontmatter+body，全部解析失败。本版放宽解析 + 兜底救回。
+
+### 修复（Bug Fix）
+
+- **修复 Save to Wiki 弱模型偶发 `LLM returned no FILE block`**：[`ingest.ts::parseFileBlocks/tryExtractImplicitBlock/repairAndWriteBlocks`] 三层加固：① `parseFileBlocks` 短横线数从精确 3 个放宽到 `-{2,}`，兼容 `----FILE: ...----`/`--FILE: ...--`；`END FILE` marker 改用大小写不敏感正则匹配，兼容任意短横线数；路径自动剥 `**bold**`/`` `backtick` ``/`<angle>`/引号外包装。② 新增 `tryExtractImplicitBlock` 兜底：当 `parseFileBlocks` 返回 `[]` 且有 `expectedPath` 时，剥外层 markdown code fence + 跳过前置寒暄行（如「好的，以下是更新后的内容：」）+ 校验首尾都有 `---` frontmatter 分隔符，把整段响应当作 expectedPath 的隐式 block。③ 兜底救回的内容仍走原有 schema validator + repair 链路，垃圾响应（如拒绝语「我不能帮你做这个」）会被 v0.10.2 三道闸（schema/page-name-validator/garbage-detector）拦截，安全可控。
+- **修复 `parseFileBlocks` 多 block 无 END FILE 时下个 marker 被吞进上个 block 的旧 bug**：[`ingest.ts::parseFileBlocks`] 原代码 `sliceEnd = starts[i+1].contentStart - 1` 只减 1（换行符），下个 block 的 `---FILE: ...---` marker 行整段被吞进上个 block 的 content。改为存 `markerStart` 字段，slice 到下个 marker 起始位置。
+
+### 改进（Improvement）
+
+- **新增 `src/lib/__tests__/ingest-parser.test.ts`（12 个用例）**：覆盖 4+ 短横线、加粗路径、反引号路径、缺 END FILE 多 block、markdown code fence 包裹、前置寒暄行、垃圾响应拒绝等典型 MiniMax/Kimi 失败模式。vitest 162/162 全过（新增 12）。
+- **debug log 增强**：兜底救回时记录 `salvaging raw response as <path>` warn 日志，含原响应长度 + 前 200 字符预览，便于定位新失败模式。
+
+---
+
+## v0.10.2 — 2026-05-11
+
+> 用户反馈 v0.10.1 落地后两个目录（`wiki/源文档/`、`wiki/查询/`）下仍堆积 200+ 个自动生成的"垃圾页"——文件名形如 `-2026-05-10.md`、`think-2026-04-19.md`、`好的，现在写入。-2026-05-07.md`，title 是 LLM 回复模板。根因是 Save to Wiki 把 chat 内容预写到 `wiki/查询/${slug}.md` 作为 autoIngest 输入文件，但 slug 算法 `replace(/[^a-z0-9\s-]/g, "")` 把中文全 strip 掉退化成空字符串。本版三件套止血 + 拔根 + 清存量。
+
+### 新功能（Feature）
+
+- **T28 — autoIngest API 重构 + Stage 0 人审 + 4-stage 流式回显**：[`ingest.ts`、`ingest-stream-hooks.ts`、`chat-message.tsx`、`ingest-queue.ts`] `autoIngest()` 新增 `AutoIngestOptions = { preAnalysis?, stream? }`：① `preAnalysis` 给定时 Stage 1 跳过 LLM 调用，直接用作分析输出进 Stage 2，避免与 Stage 0 chat 分析重复；② `IngestStreamHooks { onStageStart, onStageToken, onStageEnd }` 把 4 个 stage 的 LLM 流式 token 推到 chat，每个 stage 表现为独立 assistant 消息。Chat 面板的 `SaveToWikiButton` ingest 模式分支重写：拿 chat 对话（Stage 0 分析 + 用户补充）合成 `preAnalysis` 字符串 → 直传 `autoIngest()`，**不再写 `wiki/查询/${slug}.md`**；按钮文字 ingest 模式下显示「执行写入」（普通模式仍是「Save to Wiki」）。`ingest-queue.ts` 批量场景注入 stream hooks，每个文件前缀加 `[filename]` 区分多文件并行回显。新增 `src/lib/ingest-stream-hooks.ts` 共享 chat 流转工具。
+- **T27 — 写入前 sanity 校验**：[`page-name-validator.ts`、`chat-message.tsx`、`deep-research.ts`] 新增 `src/lib/page-name-validator.ts`：① `validatePageTitle()` hard-block 垃圾 title（「好的，以下」「好的，这是」「<think>」「```」「Save to Wiki」「filename」、空字符串、过长 >200）；② `makeSlug()` **保留中文字符**（旧算法 `replace(/[^a-z0-9\s-]/g, "")` 把中文全 strip → 空 slug → `-2026-05-10.md` 退化命名，这是垃圾文件的根因），只去 Windows 禁用字符 `\\/:*?"<>|` + 控制字符 + 折叠空白；③ `validateSlug()` 拒空/过短 slug。Chat 普通模式 Save to Wiki + Deep Research 写 queries 前都走这套校验，垃圾 title 直接 Toast 错并中止写入。
+- **T26 — wiki/源文档/ + wiki/查询/ 历史垃圾清理工具**：[`garbage-detector.ts`、`cleanup-garbage.ts`、`cleanup_garbage.rs`、`cleanup-garbage-dialog.tsx`] Settings 步骤 4 新增按钮「清理历史垃圾页」。识别规则覆盖 13 种 title 模式、14 种文件名模式、2 种 body 内容模式，例如：① title 以「好的，X」（以下/这是/我/现在/让我/这边/我来/这就/没问题/收到 等）开头、`<think>`/```、`Source: xxx` 兜底命名、`queries/`/`entities/`/`concepts/` 路径残留、「以下是」「这份」「你可以」LLM 模板；② 文件名空 slug（支持 `-N` 后缀如 `-2026-05-06-1.md`）、单字符+日期（如 `2-2026-05-06.md`）、`think-日期`/`wiki-日期`/`markdown-日期`/`save-to-wiki-` 起手、双 `--` 空字段拼接（如 `research--2026-04-22.md`）、8 位数字日期起手（如 `20260503ai53md-...`）、「好的」/「这份」中文开头、日期+中文长串描述；③ body 含 `<think>` 推理过程残留、`[Binary file: ...]` 兜底占位。命中文件归档到 `wiki/.conflicts/garbage-{源文档|查询}/`（**不删除**，可恢复）。前置检查 schema_version=1。Rust 端 zip 备份全 wiki/ 到 `.llm-wiki/backups/cleanup-garbage-*.zip`；TS 端主循环按 frontmatter parse + detector 判定 + `renameFile` 归档。
+
+### 改进（Improvement）
+
+- **Settings 推荐执行顺序**：步骤 1 Schema v1 迁移 → 步骤 2 清理 body 残骸 → 步骤 3 归一化目录 → **步骤 4 清理历史垃圾页**。每个 dialog 标注前置依赖与原因。
+- **start.ps1 启动前清理残留端口**：[`start.ps1::Stop-StalePort`] 上次崩溃/强关后 Vite (1420) 或 Clip server (19827) socket 未释放，导致 `npm run tauri dev` 报 `Port 1420 is already in use`。启动前用 `Get-NetTCPConnection` 查端口监听者 PID，`Stop-Process -Force` 终止后 sleep 500ms 释放 socket。每个杀的进程打印 PID + 进程名便于审计。
+- **autoIngest stage helpers 全部支持 onToken 回调**：[`runAnalysisStage`/`runPlanStage`/`runUpdateStage`/`runCreateStage`] 四个 stage 内的 `streamChat` onToken 都包装外传，stage 2/3/4 的内部 LLM 输出也能在 chat 流式回显，全程透明可观察。
+
+### 修复（Bug Fix）
+
+- **修复 v0.10.1 Save to Wiki 的 chat 中间垃圾文件污染**：[`chat-message.tsx:165 SaveToWikiButton`] 旧流程把 chat 回复**先**写到 `wiki/查询/${slug}-${date}.md` 作为 autoIngest 输入，再让 autoIngest 4-stage 处理。slug 算法对中文 unfriendly → 大量 `-2026-05-10.md` 空 slug + `好的，X` 中文起手垃圾文件。T28 改为 chat 内容直接 inline 传入 autoIngest（`preAnalysis` 参数），**不再产生中间文件**。`wiki/查询/` 从此专属于 Deep Research 输出（真用户查询）。
+- **修复 normalize_dirs root file moves 计划入 report 但实际未执行**：[`normalize_dirs.rs:162-181`] 原代码 `planned_moves` 调 `execute_move` 但 `root_moves`（如 `position-tracking.md → 查询/`、`trading-rules.md → 策略/`）只 push 到 report 没真正调 `fs::rename`。改为 `planned_moves.iter().chain(root_moves.iter())` 一起执行。
+- **修复 v0.10.1 garbage-detector 规则覆盖不全**：v1 只识别「好的，以下」/「好的，这是」漏了「好的，我/现在/让我/...」分支；只识别 `Source: save-to-wiki` 漏了 `Source: think/research/...`；空 slug 正则 `^-\d{4}-\d{2}-\d{2}\.md$` 漏了 `-N` 后缀（如 `-2026-05-06-1.md`）；没有 `think-日期`/`wiki-日期`/`markdown-日期` 等 chat slug 残留模式；没有 body 内容检测。v2 扩展到 13+14+2 三类规则共 29 种命中模式，单测 150 个用例全过（新增 36 个 v2 用例）。
+
+---
+
+## v0.10.1 — 2026-05-11
+
+> v0.10.0 落地后用户验证发现 plan §2 表内"type 枚举不统一"和"sources 文件名是噪音"两条只在 frontmatter 字段层解决，物理目录结构与 body 老 frontmatter 残骸未处理。本版补齐两个一次性清理工具。
+
+### 新功能（Feature）
+
+- **物理目录归一化工具（T24）**：[`normalize_dirs.rs`、`normalize-dirs.ts`、`normalize-dirs-dialog.tsx`] Settings 新增按钮 `归一化 Wiki 目录结构`：把散乱目录（`个股档案/`→`股票/`、`concept/`→`概念/`、`市场模式/`/`市场环境/`/`进化/`/`预测/`→`模式/`、`people/`→`人物/`、`analysis/`/`synthesis/`/`comparisons/`→`总结/`、`queries/`→`查询/`、`sources/`→`源文档/`）合并到 9 个 canonical 中文目录。Rust 端做 zip 备份 + `fs::rename` + 全局 wikilink 替换（`[[进化/X]]` → `[[模式/X]]`，**避开代码块**）+ 空目录清理 + 垃圾目录归档（如 LLM 残留的 `好的，以下是完整的 [[策略/`）。TS 端做 frontmatter `type` 字段强制覆写（物理路径=真相）。**跨目录重名冲突**按 frontmatter `updated` 比较，保留较新版，旧版移到 `wiki/.conflicts/<原相对路径>`。报告含合并目录数、移动文件数、冲突归档清单、wikilink 替换数、未识别项、删除空目录数，支持下载 JSON。前置检查：必须全库 `schema_version=1`，否则拒跑并提示先跑 Schema v1 迁移。
+- **Body 老 frontmatter 残骸清理工具（T25）**：[`body-residue.ts`、`cleanup-body-residue.ts`、`body_residue.rs`、`body-residue-dialog.tsx`] Settings 新增按钮 `清理 body 残骸`：扫所有页 body 头部 ±20 行，识别老格式 frontmatter 残骸（如 `***`+字段、` ``` `+`---`+字段）。从严匹配（≥3 行字段结构 + 明确终止符 + 无 markdown 标题穿插），剖完后 cleanedBody < 50 字符或剖掉内容含标题则标 uncertain 不动。**抢救** sources/tags/aliases 三类 list 字段，merge 进现有 frontmatter（去重）。13 个单测覆盖正/负/边界样本（传艺科技 `***` 起头、预测开盘 ``` 起头 + sources 抢救、中文字段 `预测日期`/`验证日期` 兼容、heading 误判保护、过短保护等）。前置检查同 T24。
+
+### 改进（Improvement）
+
+- **Settings 三步推荐执行顺序**：步骤 1 `Schema v1 迁移` → 步骤 2 `清理 body 残骸` → 步骤 3 `归一化目录结构`。每个 section 描述里标注步骤号与依赖关系，避免顺序错乱。
+- **共享前置检查工具**：[`precondition.ts::verifyAllSchemaV1`] T24/T25 复用，遍历 wiki/ 校验所有非 housekeeping 页 schema_version=1，报告前 20 个不合规页面路径。
+- **`.conflicts/` 隔离区设计**：跨目录重名不强行覆盖、不删旧版，全部进 `wiki/.conflicts/<原路径>`，让用户手动审 diff 后再决定保留哪个。所有备份/扫描操作排除 `.conflicts/`。
+
+### 修复（Bug Fix）
+
+- **修复 v0.10.0 plan §2 表内"type 枚举不统一"未真正解决**：v0.10.0 只归一化了 frontmatter `type:` 字段，物理目录仍然散落（`wiki/进化/`、`wiki/市场模式/` 等共 12+ 个）。T24 一次性合并到 9 个 canonical 目录。
+- **修复 v0.10.0 plan §2 表内"body 残留旧 frontmatter"未处理**：实测 `wiki/股票/传艺科技.md` 等文件 body 起点残留整段老 frontmatter（顶部新 frontmatter 正常，body 第一行起又有 `*** + title:` 段），原因是 `stripYamlWrapper` 只剥一层，老格式双重包裹/`***` 分隔变体漏到 body。T25 一次性清理。
+
+---
+
+## v0.10.0 — 2026-05-11
+
+> Wiki Schema v1 规范化：frontmatter 升级为可校验、可检索、可信任的结构化层；新增 PostgreSQL 股票代码集成、LLM 输出 schema 校验+重试、一次性迁移工具、健康检查 lint。
+
+### 新功能（Feature）
+
+- **Wiki Schema v1 规范化**：[`schema.ts`、`schema.test.ts`] 新增 `src/lib/schema.ts` 内核，定义 9 种 type 锁死枚举（股票/概念/策略/模式/错误/人物/总结/查询/源文档）、4 种 status（活跃/观察/归档/废弃）、3 级 confidence（高/中/低）、4 级 momentum（热/活跃/降温/已死）。导出 `validate()` / `parseFrontmatter()` / `serializeFrontmatter()` / `cleanSources()` / `normalizeTypeAlias()` / `inferTypeFromPath()` / `canonicalSampleFor()` / `nowLocalTimestamp()` 等工具。36 个单元测试覆盖必填字段、字数边界、CJK 字数、wikilink 格式、type 别名归一化等。
+- **PostgreSQL 股票代码集成**：[`settings.rs`、`stock_codes.rs`、`stock-codes.ts`、`settings-view.tsx`、`App.tsx`] Save to Wiki 写股票页时由 NAS 上的 `cn_stock_db.cn_stock_name_wind` 表覆写 `code` 字段（LLM 实测会瞎编：爱迪特→sz301387，DB 真值 SZ301580）。新增 Settings 页 `PostgreSQL 股票代码源` 面板（host/port/user/password/database），点 `立即刷新` 会拉全表 ~6258 条到 `{project}/.llm-wiki/stock-codes.json` 缓存。应用启动+项目打开时后台自动同步（24h 缓存，失败不阻塞 UI）。Rust 端用 `tokio-postgres` 直连。
+- **Frontmatter validate + LLM 重试机制**：[`ingest.ts::repairBlock`、`repairAndWriteBlocks`、`buildRetryPrompt`] Stage 3/4 每个 FILE block 解析后立即跑 `validate()`：违规则用 retry prompt（含原始 block + 违规清单 + canonical sample）让 LLM 重写 frontmatter，强制"正文一字不改"。最多重试 3 次，活动面板子项右侧实时显示 `重试中 N/3` 黄色 badge。股票页强制 DB 覆写 code；DB 查不到则该 plan item 标 error 并附"DB 中查不到股票 X 的代码"，不阻塞其他页面。
+- **Stage 3/4 Prompt 集成 schema**：[`ingest.ts::buildSchemaSection`、`buildUpdatePrompt`、`buildCreatePrompt`] 新增 `buildSchemaSection(types, nowTs)`，prompt 头部嵌入完整 Schema v1 说明（必填字段、type 专属字段、格式约束、type-specific canonical sample）。强调："Never wrap the frontmatter in ```yaml"、"code 由系统覆写"、"summary 50-120 字不复读正文"、"related 必须 [[type/name]] 形式"、"时间戳 YYYY-MM-DD HH:mm:ss"。移除老的"frontmatter 自由发挥"提示。
+- **Schema v1 一次性迁移工具**：[`migrate.rs`、`migrate-schema-v1.ts`、`migrate-schema-dialog.tsx`] Settings 新增按钮 `迁移 Wiki 到 Schema v1`：确认对话框 → Rust 端 zip 备份 `wiki/` 到 `.llm-wiki/backups/migrate-schema-v1-<ts>.zip` → TS 端串行处理每个 .md：去 ```yaml 包裹、type 归一化（市场模式/进化/预测→模式 等）、补 schema_version/aliases/summary/last_reviewed/confidence/status 默认值、清洗 sources（去 LLM 回复前缀、去 .md 后缀、去 -1/-2 重复）、股票页查 DB 覆写 code、时间戳补秒（2026-04-23 → 2026-04-23 00:00:00）。进度条显示当前文件，完成报告区分迁移/失败/查不到 code 的股票，并支持下载 JSON 报告。
+- **Wiki 健康检查 (Schema Lint)**：[`lint.ts::runSchemaLint`、`lint-view.tsx`] Lint 页面新增 `schema` 类型问题（图标 FileCog）：检查缺必填、type/status/confidence 枚举越界、summary 字数、related wikilink 合法、related 目标存在、时间戳格式、股票页 code、标题与文件名一致、残留 ```yaml 包裹。结果按 severity 分组显示，点击跳转对应页面。
+
+### 改进（Improvement）
+
+- **Save to Wiki 生成的 frontmatter 100% 合规**：Stage 4 写入前所有 wiki 内容页强制经过 validate + repair，任何 fatal 违规都通过 LLM 重试自动修复，最坏情况标 error 而非污染知识库。
+- **type / status / confidence 枚举锁死**：禁止 LLM 自创 `市场模式`/`进化`/`预测` 等同义目录，统一归并到 `模式`；`分析`/`比较`/`synthesis` 统一归并到 `总结`。
+- **新增 schema 关键字段**：`schema_version: 1` 区分版本；`summary` 50-120 字概括便于 embedding 召回；`aliases` 提升一词多名召回（DeepSeek V4 / DSv4 / 深度求索）；`last_reviewed` 与 `updated` 解耦，支持"30 天未复核"提醒。
+- **重试 prompt 强制保留正文**：[`ingest.ts::buildRetryPrompt`] 否则 LLM 借机重写正文，每次都不一样，用户失去信任。
+- **PlanItem 显示重试 badge**：[`activity-store.ts::PlanItem.note`、`activity-panel.tsx`] PlanItem 新增 `note?: string` 字段，校验重试时实时显示 `重试中 N/3`，完成后自动清除。
+
+### 修复（Bug Fix）
+
+- **修复 365 个老页面 ```yaml wrapper bug**：[迁移工具] 此前 365/495 文件的 frontmatter 被错误的 ```yaml 代码块包裹（不是合法 frontmatter）。`parseFrontmatter()` 自动识别并剥离 wrapper，迁移工具会一次性清掉所有存量。
+- **修复股票 code 字段 LLM 瞎编**：[`stock_codes.rs::lookup_stock_code`、`ingest.ts::repairBlock`] LLM 写的 code 实测错误（爱迪特 sz301387 ≠ DB 中 SZ301580），现强制由 DB 覆写。Save to Wiki 与迁移工具均执行此覆写。
+- **修复 sources 字段污染**：[`schema.ts::cleanSources`] `好的，以下是-2026-05-08.md`、`]]-页面内容...md` 这类 LLM 回复前缀截出来的垃圾文件名被自动剔除；`.md` 后缀去除；`-1`/`-2` 重复后缀去除；超长名截断。
+
+---
+
+## v0.9.1 — 2026-05-11
+
+### 修复（Bug Fix）
+
+- **修复新用户克隆后编译失败**：[`start.ps1`、`.gitignore`、`README.md`、`README_CN.md`] `lancedb` → `lance-encoding` 在 Windows 上编译需要 `protoc`，新用户跑 `start.cmd` 会卡在 `Could not find 'protoc'`。`start.ps1` 现增加 `Ensure-Protoc` 段：优先用 PATH 里已有的 `protoc`，否则检查 `.cache/protoc/bin/protoc.exe`，再否则自动从 GitHub Releases 下载 `protoc-28.3-win64.zip` 解压到本地缓存，最后导出 `$env:PROTOC`。整个过程对用户透明，仅首次启动多 ~3 MB 下载。`.gitignore` 同步排除 `.cache/`，README 中英双版安装小节注明此行为。
+
+---
+
+## v0.9.0 — 2026-05-11
+
+> Save to Wiki 完整重构：从一次性"生成—覆盖"流程升级为 4 阶段 agent loop，新增网络重试、断点续连、宽松解析、可视化进度，杜绝旧页面被无脑覆盖与瞬时网络抖动导致的全流程失败。
+
+### 新功能（Feature）
+
+- **Save to Wiki 改为 4 阶段 agent loop**：[`ingest.ts`、`activity-store.ts`、`activity-panel.tsx`] 旧流程一次性让 LLM 输出所有 FILE 块然后整批写入，凡是同名已有页面都被无差别覆盖，历史内容丢失。现拆为：
+  - **Step 1 分析源文档** → 结构化分析文本
+  - **Step 2 规划变更** → JSON 计划，明确每个页面是新建还是更新
+  - **Step 3 更新已有页面** → 每页独立一次 LLM 调用，prompt 注入现有正文并要求"必须保留全部已有内容"
+  - **Step 4 新建页面 + 索引/概览/日志** → 单次批量生成新建页面 + 重写 index/overview + 追加 log
+
+  Activity 面板按阶段分组显示：4 个 Step 头始终可见，已完成打 ✓；Step 3/4 下方挂每个文件子项，独立 ✓/⟳/✗，点击可跳到对应页面。"新建"与"更新"在子项上用 ➕（emerald）/✏️（blue）/📄（amber 追加）区分。
+
+- **网络错误自动重试 + 断点续连**：[`retry.ts`、`ingest-checkpoint.ts`、`ingest.ts`] 此前任一 Stage 网络抖一下整个 Save to Wiki 就失败，重新点击要从头跑 5-10 分钟。现在：
+  - 每个 stage 内的 streamChat 调用自动重试（瞬时错误 3 次，3s/8s 指数退避；HTTP 5xx/429/timeout/Load failed/Connection lost 才重；4xx 与用户取消不重）。
+  - 每个 stage 完成后按 source-content sha256 落盘到 `.llm-wiki/ingest-state/<hash>.json`。Stage 3 单页成功立即写，不丢已完成进度。
+  - 重新点击 Save to Wiki 同源 hash → 自动跳过 Stage 1/2、跳过 Stage 3 已写页面、从断点继续。全流程成功后 checkpoint 自动清理。
+  - 重试期间 UI 显示 `"网络错误，3s 后重试（第 2/3 次）"`。
+
+- **新增调试日志基础设施**：[`debug-log.ts`、`fs.rs::append_file`] 前端调用 `debugLog(level, tag, message, data)` 会写到 `<project>/.llm-wiki/debug.log`（500KB 自动滚动保留尾 200KB）。ingest 过程的所有重试事件、未解析的 LLM 响应、缺失的 housekeeping 页面都会被记录，方便后续排查"为什么这个页面没更新"。
+
+- **Codex Responses API native HTTP fallback**：[`llm-providers.ts`、`llm-client.ts`] Tauri WebView 跨域 fetch 在多数中转站上直接 "Failed to fetch"。现 Codex provider 增加 `parseNonStreamingResponse` 参数，fetch streaming 失败时自动改走 Rust `reqwest` 非流式请求（与 OpenAI 兼容 provider 同款 fallback 路径），但响应仍按 Responses API 三段式宽松解析（top-level `output_text` / `output[].content[].text` / chat-completions 归一化 shape）。
+
+### 改进（Improvement）
+
+- **宽松 FILE 块解析**：[`ingest.ts::parseFileBlocks`] 旧解析器要求 LLM 每个 FILE 块都正确闭合 `---END FILE---`，但 Codex GPT-5.5 在长输出（8000+ 字符）时偶发漏写关闭标记，整段内容被丢。现按 `---FILE:` 开始切段，缺关闭标记时截到下一个 `---FILE:` 或文本末尾，挽救了实测 18 页里偶发 2 页失败的真因。
+
+- **Stage 2 Plan Prompt 收紧**：[`ingest.ts::buildPlanPrompt`、`buildAnalysisPrompt`] 此前源文档明确列出"可考虑新建页面"时，LLM 经常按"可选"过滤掉。现 Plan prompt 加 CRITICAL 段：所有 `建议更新` / `建议新建` / `可考虑新建` / `可新建` / `应新建` / `should create` / `recommend creating` 标签下的路径必须进 plan，`[模式/xxx](wikilink:模式/xxx)` 这种格式自动转 `wiki/模式/xxx.md`。Analysis prompt 的 Recommendations 段也拆成两个明确子节，强制 LLM 列出完整路径 + 类型 + 一句话理由。
+
+- **Stage 4 housekeeping 子项可见**：[`activity-store.ts::PlanItem`、`ingest.ts`、`activity-panel.tsx`] 此前 `index.md` / `overview.md` / `log.md` 这三个永远在 Stage 4 处理的文件不在 plan 里，UI 不可见。现合成 3 个固定 stage-4 子项独立显示。Stage 4 写完后核对 LLM 是否真的产出这 3 个文件，缺失会标红 + 写 debug.log，杜绝"Step 4 跑得太快是不是没做"的猜疑。
+
+- **normalizePlan 兜底**：[`ingest.ts::normalizePlan`] LLM 把新页面错放进 update 但文件不存在时，之前会被静默丢弃。现自动移到 create 并按路径推断 type/title，"建议新建"的页面再也不会消失。
+
+- **源文件去重**：[`chat-message.tsx`] 此前 Save to Wiki 失败重试时，每次会因为命名冲突生成 `xxx-1.md`、`xxx-2.md` 脏数据，原文件还在。现保存前对比内容：同名且内容相同则复用文件名，仅当内容真正不同才递增后缀。
+
+### 修复（Bug Fix）
+
+- **修复 FILE_BLOCK_REGEX 漏匹配 kebab-case 路径**：[`ingest.ts`] 旧正则 `[^\n-]+?` 把路径里的 `-` 也排除掉了，导致 `wiki/模式/foo-bar.md` 这类 kebab-case 文件名根本无法解析为 FILE 块路径。改为 `.+?` 后任何合法路径都能匹配。
+
+- **修复 writeFileBlocks 在路径偏差时丢内容**：[`ingest.ts`] 单 FILE 块场景下若 LLM 输出的路径与 expectedPath 不一致（例如多了/少了前缀），现接受内容并按 expectedPath 写入，并记录 warn 日志，避免因为路径标点小差异让整页内容白生成。
+
+---
+
+## v0.7.8 — 2026-05-10
+
+### 新功能（Feature）
+
+- **新增 Codex (Responses API) provider**：[`llm-providers.ts`、`settings-view.tsx`、`wiki-store.ts`] 支持 OpenAI Responses API `/v1/responses` 端点，覆盖 GPT-5 / Codex 系列推理模型（`gpt-5.4`、`gpt-5.3-codex` 等）。Settings 选 Codex 后填中转站 base URL（如 `https://api.suyacode.com`）+ API key + Reasoning effort（minimal / low / medium / high）即可使用，URL 自动拼接 `/v1/responses`，鉴权 `Authorization: Bearer` + `openai-beta: responses=experimental`。请求体走 Responses API 专用形态：`instructions` 字段承载 system 文本、`input` 数组用 `input_text` / `output_text` 区分用户与历史回复、`reasoning.effort` 控制思考深度、SSE 流解析 `response.output_text.delta` 事件。
+
+### 修复（Bug Fix）
+
+- **修复中转站只配 Codex 额度时返回 503 `no_available_providers`**：[`llm-providers.ts`] 此前所有 OpenAI 兼容请求都走 `/v1/chat/completions`，但 claude-code-hub 体系（含 suyacode）将 GPT-5 / Codex 系列归类为 `providerType="codex"`，**只能从 `/v1/responses` 端点路由**。两个池子（openai-compatible / codex）匹配不上时直接 503。现新增独立 Codex provider 走正确端点，问题根除。
+
+---
+
+## v0.7.7 — 2026-05-10
+
+### 新功能（Feature）
+
+- **新增 Kimi Code 一等公民 provider**：[`llm-providers.ts`、`settings-view.tsx`、`wiki-store.ts`] 选择 "Kimi Code" 后自动预填 base URL `https://api.kimi.com/coding/v1` 与默认模型 `kimi-for-coding`（256K 上下文）。鉴权走标准 `Authorization: Bearer sk-xxx`，请求体为 OpenAI 兼容流式 `/chat/completions`。如需通用 Kimi（moonshot-v1-* 系列），在 endpoint 输入框填 `https://api.moonshot.cn/v1` 并改 model 即可，customEndpoint 字段会覆盖默认值。
+- **设置页新增连接测试与 URL 预览**：[`settings-view.tsx`、`llm-test.ts`] 借鉴 Claude Code Hub 的 provider 配置体验，在 LLM Provider 卡片底部新增三处可见性优化：
+  - **API Key 眼睛图标**：默认遮罩，点击切换显示。中转站 key 经常被截断，这下能直接核对尾几位是否粘对。
+  - **最终请求 URL 实时预览**：根据当前 provider + endpoint + model 实时拼出真实请求路径并展示，附一键复制。彻底消除"我填的 base URL 粒度对不对"的困惑。
+  - **测试连接按钮**：一键发送最短消息，命中首 token 即判定连通，显示首 token 延迟或 HTTP 状态码与错误正文。15s 超时，不会保存表单修改。能在不离开设置页的情况下定位 401/403/超时/路径错误。
+
+### 改进（Improvement）
+
+- **OpenAI 兼容 provider 自动 native HTTP fallback**：[`llm-client.ts`、`llm-providers.ts`] Tauri WebView 在 Windows/macOS 下对 fetch 跨域请求受 CORS preflight 限制，国内多数 provider（Kimi、MiniMax、部分中转站）未开放浏览器跨域访问，直接报 "Failed to fetch"。现在 fetch 失败且错误形如 `Failed to fetch` / `Load failed` / `NetworkError` 时，OpenAI 兼容 provider（OpenAI / Ollama / MiniMax / Kimi / Custom）自动调用 Tauri native HTTP（reqwest）非流式重试，绕过 WebView CORS。CORS 友好的 provider（如 OpenAI 官方、CORS-enabled 中转站）保持 fetch 流式输出体验不变；Anthropic / Google 因响应格式差异不参与 fallback。
+- **OpenAI 与 Anthropic 支持自定义 endpoint**：[`llm-providers.ts`、`settings-view.tsx`] 此前两者的请求 URL 在代码中写死，无法走中转/代理。现复用既有 `customEndpoint` 字段，与 MiniMax 同款做法 —— 设置面板针对 `openai`、`anthropic` 也显示 endpoint 输入框，留空使用官方地址，填写时按 base URL 粒度（如 `https://api.openai.com/v1`、`https://api.anthropic.com`），代码内部分别拼接 `/chat/completions` 与 `/v1/messages`。
+- **Anthropic 自定义 endpoint 鉴权头适配中转站**：[`llm-providers.ts`] 此前同时发送 `x-api-key` 和 `anthropic-dangerous-direct-browser-access`，多数中转站（oneapi、new-api、aiproxy、claude-code-hub 等）会因「冲突的双份凭据」或不识别的浏览器直连标记直接 403。现在区分官方 vs 中转：官方继续用 `x-api-key` + 浏览器直连标记；自定义 endpoint 时只发 `Authorization: Bearer <key>` + `anthropic-version`，与 Claude Code Hub `headers.ts` 的 `resolveAnthropicAuthHeaders` 同款策略。
 
 ---
 

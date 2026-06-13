@@ -1,6 +1,7 @@
 import type { LlmConfig } from "@/stores/wiki-store"
 import { postJsonViaNativeHttp } from "@/commands/http"
 import { getProviderConfig } from "./llm-providers"
+import { debugLog } from "./debug-log"
 
 export type { ChatMessage } from "./llm-providers"
 
@@ -21,8 +22,19 @@ export function shouldUseNativeHttpForLlm(config: LlmConfig): boolean {
 }
 
 export function extractAssistantTextFromResponse(responseText: string): string {
-  const parsed = JSON.parse(responseText) as {
-    choices?: Array<{ message?: { content?: string | null } }>
+  const trimmed = responseText.trim()
+  if (trimmed.startsWith("<")) {
+    const preview = trimmed.slice(0, 80).replace(/\s+/g, " ")
+    throw new Error(
+      `服务器返回了 HTML 而不是 JSON（通常是 endpoint 路径错误，多数中转站需要 /v1 后缀）。响应开头：${preview}`,
+    )
+  }
+  let parsed: { choices?: Array<{ message?: { content?: string | null } }> }
+  try {
+    parsed = JSON.parse(responseText)
+  } catch {
+    const preview = trimmed.slice(0, 120)
+    throw new Error(`无法解析服务器响应（非 JSON）：${preview}`)
   }
   const content = parsed.choices?.[0]?.message?.content
   if (typeof content !== "string" || content.length === 0) {
@@ -98,9 +110,39 @@ export async function streamChat(
   callbacks: StreamCallbacks,
   signal?: AbortSignal,
 ): Promise<void> {
-  const { onToken, onDone, onError } = callbacks
   const providerConfig = getProviderConfig(config)
   const requestBody = providerConfig.buildBody(messages)
+
+  const reqId = Math.random().toString(36).slice(2, 8)
+  const totalChars = messages.reduce((acc, m) => acc + m.content.length, 0)
+  debugLog("info", "llm-client", `Request ${reqId} start`, {
+    provider: config.provider,
+    model: config.model,
+    url: providerConfig.url,
+    messageCount: messages.length,
+    totalChars,
+    isOpenAiCompatible: providerConfig.isOpenAiCompatible,
+    hasNonStreamingParser: Boolean(providerConfig.parseNonStreamingResponse),
+  })
+
+  let tokenCount = 0
+  const onToken = (t: string) => {
+    tokenCount++
+    callbacks.onToken(t)
+  }
+  const onDone = () => {
+    debugLog("info", "llm-client", `Request ${reqId} done`, { tokenCount })
+    callbacks.onDone()
+  }
+  const onError = (e: Error) => {
+    debugLog("error", "llm-client", `Request ${reqId} error`, {
+      tokenCount,
+      message: e.message,
+      rawResponse: (e as any).rawResponse,
+      parsed: (e as any).parsed,
+    })
+    callbacks.onError(e)
+  }
 
   if (shouldUseNativeHttpForLlm(config)) {
     try {
@@ -116,7 +158,9 @@ export async function streamChat(
         ),
         signal,
       )
-      const content = extractAssistantTextFromResponse(responseText)
+      const parser =
+        providerConfig.parseNonStreamingResponse ?? extractAssistantTextFromResponse
+      const content = parser(responseText)
       onToken(content)
       onDone()
       return
@@ -173,6 +217,46 @@ export async function streamChat(
       // Otherwise it's a timeout or network error
       onError(new Error("Request timed out or network error. The model may need more time — try again or use a faster model."))
       return
+    }
+    // "Failed to fetch" / "Load failed" 在 Tauri WebView 里通常是 CORS 或 DNS 问题。
+    // OpenAI 兼容 provider 自动 fallback 到 native HTTP（非流式），绕过 WebView 限制。
+    const isNetworkLikeError =
+      err instanceof Error &&
+      (err.message.includes("Failed to fetch") ||
+        err.message.includes("Load failed") ||
+        err.message.includes("NetworkError"))
+    const canFallback =
+      providerConfig.isOpenAiCompatible || Boolean(providerConfig.parseNonStreamingResponse)
+    if (isNetworkLikeError && canFallback) {
+      debugLog("warn", "llm-client", `Request ${reqId} streaming failed, falling back to native HTTP`, {
+        url: providerConfig.url,
+        originalError: err instanceof Error ? err.message : String(err),
+      })
+      try {
+        const nonStreamingBody =
+          requestBody && typeof requestBody === "object"
+            ? { ...(requestBody as Record<string, unknown>), stream: false }
+            : requestBody
+        const responseText = await waitForNativeHttpResponse(
+          postJsonViaNativeHttp(providerConfig.url, providerConfig.headers, nonStreamingBody),
+          signal,
+        )
+        const parser =
+          providerConfig.parseNonStreamingResponse ?? extractAssistantTextFromResponse
+        const content = parser(responseText)
+        onToken(content)
+        onDone()
+        return
+      } catch (fallbackErr) {
+        if (fallbackErr instanceof Error && fallbackErr.name === "AbortError" && signal?.aborted) {
+          onDone()
+          return
+        }
+        onError(
+          fallbackErr instanceof Error ? fallbackErr : new Error(String(fallbackErr)),
+        )
+        return
+      }
     }
     onError(err instanceof Error ? err : new Error(String(err)))
     return

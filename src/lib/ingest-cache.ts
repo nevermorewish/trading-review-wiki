@@ -3,18 +3,18 @@ import { normalizePath } from "@/lib/path-utils"
 
 /**
  * SHA256-based ingest cache.
- * Stores hash of source file content → skips re-ingest if unchanged.
+ * Keyed by content hash so identical content under different filenames dedups.
  * Cache file: .llm-wiki/ingest-cache.json
  */
 
 interface CacheEntry {
-  hash: string
+  sourceFileName: string
   timestamp: number
   filesWritten: string[]
 }
 
 interface CacheData {
-  entries: Record<string, CacheEntry> // keyed by source filename
+  entries: Record<string, CacheEntry> // keyed by content hash
 }
 
 async function sha256(content: string): Promise<string> {
@@ -47,23 +47,18 @@ async function saveCache(projectPath: string, cache: CacheData): Promise<void> {
 }
 
 /**
- * Check if a source file has already been ingested with the same content.
+ * Check if content with this hash has already been ingested (regardless of source filename).
  * Returns the list of previously written files if cached, or null if ingest is needed.
  */
 export async function checkIngestCache(
-  projectPath: string,
-  sourceFileName: string,
+  _projectPath: string,
+  _sourceFileName: string,
   sourceContent: string,
 ): Promise<string[] | null> {
-  const cache = await loadCache(projectPath)
-  const entry = cache.entries[sourceFileName]
-  if (!entry) return null
-
-  const currentHash = await sha256(sourceContent)
-  if (entry.hash === currentHash) {
-    return entry.filesWritten
-  }
-  return null
+  const cache = await loadCache(_projectPath)
+  const hash = await sha256(sourceContent)
+  const entry = cache.entries[hash]
+  return entry ? entry.filesWritten : null
 }
 
 /**
@@ -78,8 +73,8 @@ export async function saveIngestCache(
   const cache = await loadCache(projectPath)
   const hash = await sha256(sourceContent)
   const newEntries = { ...cache.entries }
-  newEntries[sourceFileName] = {
-    hash,
+  newEntries[hash] = {
+    sourceFileName,
     timestamp: Date.now(),
     filesWritten,
   }
@@ -87,14 +82,19 @@ export async function saveIngestCache(
 }
 
 /**
- * Remove a source file entry from cache (e.g., when source is deleted).
+ * Remove cache entries that reference a given source filename
+ * (e.g., when the source file is deleted).
  */
 export async function removeFromIngestCache(
   projectPath: string,
   sourceFileName: string,
 ): Promise<void> {
   const cache = await loadCache(projectPath)
-  const newEntries = { ...cache.entries }
-  delete newEntries[sourceFileName]
+  const newEntries: Record<string, CacheEntry> = {}
+  for (const [hash, entry] of Object.entries(cache.entries)) {
+    if (entry.sourceFileName !== sourceFileName) {
+      newEntries[hash] = entry
+    }
+  }
   await saveCache(projectPath, { entries: newEntries })
 }

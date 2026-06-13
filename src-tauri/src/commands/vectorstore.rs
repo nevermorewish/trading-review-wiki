@@ -3,6 +3,8 @@ use lancedb::query::{ExecutableQuery, QueryBase};
 use arrow_array::{Float32Array, RecordBatch, StringArray, FixedSizeListArray, ArrayRef};
 use arrow_schema::{DataType, Field, Schema};
 use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 /// Result from vector search
@@ -12,11 +14,47 @@ pub struct VectorSearchResult {
     pub score: f32,
 }
 
+/// Safe maintenance stats for the LanceDB vector store.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct VectorStoreStats {
+    pub db_path: String,
+    pub table_exists: bool,
+    pub row_count: usize,
+    pub db_bytes: u64,
+    pub data_bytes: u64,
+    pub versions_bytes: u64,
+    pub transactions_bytes: u64,
+    pub error: Option<String>,
+}
+
 fn db_path(project_path: &str) -> String {
     format!("{}/.llm-wiki/lancedb", project_path.replace('\\', "/"))
 }
 
 const TABLE_NAME: &str = "wiki_vectors";
+
+fn table_path(project_path: &str) -> PathBuf {
+    Path::new(&db_path(project_path)).join(format!("{}.lance", TABLE_NAME))
+}
+
+fn dir_size_bytes(path: &Path) -> u64 {
+    let Ok(metadata) = fs::symlink_metadata(path) else {
+        return 0;
+    };
+    if metadata.is_file() {
+        return metadata.len();
+    }
+    if !metadata.is_dir() {
+        return 0;
+    }
+    let Ok(entries) = fs::read_dir(path) else {
+        return 0;
+    };
+    entries
+        .filter_map(Result::ok)
+        .map(|entry| dir_size_bytes(&entry.path()))
+        .sum()
+}
 
 /// Validate page_id to prevent filter injection
 fn validate_page_id(page_id: &str) -> Result<(), String> {
@@ -235,4 +273,63 @@ pub async fn vector_count(
         .map_err(|e| format!("Count error: {e}"))?;
 
     Ok(count)
+}
+
+/// Audit vector store size and row count before maintenance.
+#[tauri::command]
+pub async fn vector_stats(
+    project_path: String,
+) -> Result<VectorStoreStats, String> {
+    let db_path_string = db_path(&project_path);
+    let db_root = Path::new(&db_path_string);
+    let table_root = table_path(&project_path);
+    let mut stats = VectorStoreStats {
+        db_path: db_path_string.clone(),
+        table_exists: table_root.exists(),
+        row_count: 0,
+        db_bytes: dir_size_bytes(db_root),
+        data_bytes: dir_size_bytes(&table_root.join("data")),
+        versions_bytes: dir_size_bytes(&table_root.join("_versions")),
+        transactions_bytes: dir_size_bytes(&table_root.join("_transactions")),
+        error: None,
+    };
+
+    if !db_root.exists() {
+        return Ok(stats);
+    }
+
+    match connect(&db_path_string).execute().await {
+        Ok(db) => match db.table_names().execute().await {
+            Ok(tables) => {
+                stats.table_exists = tables.contains(&TABLE_NAME.to_string());
+                if stats.table_exists {
+                    match db.open_table(TABLE_NAME).execute().await {
+                        Ok(table) => match table.count_rows(None).await {
+                            Ok(count) => stats.row_count = count,
+                            Err(e) => stats.error = Some(format!("Count error: {e}")),
+                        },
+                        Err(e) => stats.error = Some(format!("Open table error: {e}")),
+                    }
+                }
+            }
+            Err(e) => stats.error = Some(format!("List tables error: {e}")),
+        },
+        Err(e) => stats.error = Some(format!("DB connect error: {e}")),
+    }
+
+    Ok(stats)
+}
+
+/// Clear the rebuildable LanceDB vector store.
+#[tauri::command]
+pub async fn vector_clear(
+    project_path: String,
+) -> Result<(), String> {
+    let db_path_string = db_path(&project_path);
+    let db_root = Path::new(&db_path_string);
+    if !db_root.exists() {
+        return Ok(());
+    }
+    fs::remove_dir_all(db_root)
+        .map_err(|e| format!("Failed to clear vector store '{}': {e}", db_path_string))
 }

@@ -3,12 +3,13 @@ import type { WikiProject, FileNode } from "@/types/wiki"
 import type { AppTheme } from "@/types/theme"
 
 interface LlmConfig {
-  provider: "openai" | "anthropic" | "google" | "ollama" | "custom" | "minimax"
+  provider: "openai" | "anthropic" | "google" | "ollama" | "custom" | "minimax" | "kimi" | "codex"
   apiKey: string
   model: string
   ollamaUrl: string
   customEndpoint: string
   maxContextSize: number // max context window in characters
+  reasoningEffort?: "minimal" | "low" | "medium" | "high" // codex 专用
 }
 
 interface SearchApiConfig {
@@ -23,6 +24,14 @@ interface EmbeddingConfig {
   model: string // e.g. "text-embedding-qwen3-embedding-0.6b"
 }
 
+interface PgConfig {
+  host: string
+  port: number | null
+  user: string
+  password: string
+  database: string
+}
+
 interface WikiState {
   project: WikiProject | null
   fileTree: FileNode[]
@@ -33,6 +42,7 @@ interface WikiState {
   llmConfig: LlmConfig
   searchApiConfig: SearchApiConfig
   embeddingConfig: EmbeddingConfig
+  pgConfig: PgConfig
   dataVersion: number
   appTheme: AppTheme
 
@@ -45,6 +55,7 @@ interface WikiState {
   setLlmConfig: (config: LlmConfig) => void
   setSearchApiConfig: (config: SearchApiConfig) => void
   setEmbeddingConfig: (config: EmbeddingConfig) => void
+  setPgConfig: (config: PgConfig) => void
   bumpDataVersion: () => void
   setAppTheme: (theme: AppTheme) => void
 }
@@ -86,9 +97,18 @@ export const useWikiStore = create<WikiState>((set) => ({
     model: "",
   },
 
+  pgConfig: {
+    host: "",
+    port: null,
+    user: "",
+    password: "",
+    database: "",
+  },
+
   setLlmConfig: (llmConfig) => set({ llmConfig }),
   setSearchApiConfig: (searchApiConfig) => set({ searchApiConfig }),
   setEmbeddingConfig: (embeddingConfig) => set({ embeddingConfig }),
+  setPgConfig: (pgConfig) => set({ pgConfig }),
   bumpDataVersion: () => set((state) => ({ dataVersion: state.dataVersion + 1 })),
   setAppTheme: (appTheme) => {
     if (appTheme === "light") {
@@ -100,4 +120,4 @@ export const useWikiStore = create<WikiState>((set) => ({
   },
 }))
 
-export type { WikiState, LlmConfig, SearchApiConfig, EmbeddingConfig }
+export type { WikiState, LlmConfig, SearchApiConfig, EmbeddingConfig, PgConfig }

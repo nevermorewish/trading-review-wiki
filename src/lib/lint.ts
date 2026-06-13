@@ -4,9 +4,10 @@ import type { LlmConfig } from "@/stores/wiki-store"
 import type { FileNode } from "@/types/wiki"
 import { useActivityStore } from "@/stores/activity-store"
 import { getFileName, getRelativePath, normalizePath } from "@/lib/path-utils"
+import { parseFrontmatter, validate } from "@/lib/schema"
 
 export interface LintResult {
-  type: "orphan" | "broken-link" | "no-outlinks" | "semantic" | "strategy"
+  type: "orphan" | "broken-link" | "no-outlinks" | "semantic" | "strategy" | "schema"
   severity: "warning" | "info"
   page: string
   detail: string
@@ -139,6 +140,90 @@ export async function runStructuralLint(projectPath: string): Promise<LintResult
           page: shortName,
           detail: `Broken link: [[${link}]] — target page not found.`,
         })
+      }
+    }
+  }
+
+  return results
+}
+
+// ── Schema v1 lint ────────────────────────────────────────────────────────────
+
+const RESERVED = new Set(["index.md", "overview.md", "log.md"])
+
+export async function runSchemaLint(projectPath: string): Promise<LintResult[]> {
+  const wikiRoot = `${normalizePath(projectPath)}/wiki`
+  let tree: FileNode[]
+  try {
+    tree = await listDirectory(wikiRoot)
+  } catch {
+    return []
+  }
+
+  const wikiFiles = flattenMdFiles(tree).filter((f) => !RESERVED.has(f.name))
+  const slugSet = new Set<string>()
+  for (const f of wikiFiles) {
+    slugSet.add(getRelativePath(f.path, wikiRoot).replace(/\.md$/, ""))
+  }
+
+  const results: LintResult[] = []
+
+  for (const f of wikiFiles) {
+    const shortName = getRelativePath(f.path, wikiRoot)
+    let content: string
+    try {
+      content = await readFile(f.path)
+    } catch {
+      continue
+    }
+
+    const { fm, hadYamlWrapper } = parseFrontmatter(content)
+
+    if (!hadYamlWrapper) {
+      results.push({
+        type: "schema",
+        severity: "warning",
+        page: shortName,
+        detail: "Frontmatter 未被 ```yaml 代码块包裹（建议重新运行 Schema v1 迁移工具）",
+      })
+    }
+
+    // Title vs filename
+    const fileTitle = f.name.replace(/\.md$/, "")
+    if (typeof fm.title === "string" && fm.title.trim() && fm.title.trim() !== fileTitle) {
+      results.push({
+        type: "schema",
+        severity: "info",
+        page: shortName,
+        detail: `title "${fm.title}" 与文件名 "${fileTitle}" 不一致`,
+      })
+    }
+
+    // Validate against schema
+    const violations = validate(fm)
+    for (const v of violations) {
+      results.push({
+        type: "schema",
+        severity: v.fatal ? "warning" : "info",
+        page: shortName,
+        detail: `[${v.field}] ${v.message}`,
+      })
+    }
+
+    // related target exists
+    if (Array.isArray(fm.related)) {
+      for (const item of fm.related) {
+        if (typeof item !== "string") continue
+        const inner = item.replace(/^\[\[|\]\]$/g, "")
+        if (!inner) continue
+        if (!slugSet.has(inner) && !slugSet.has(inner.replace(/\.md$/, ""))) {
+          results.push({
+            type: "schema",
+            severity: "info",
+            page: shortName,
+            detail: `related 指向的页面不存在: "${item}"`,
+          })
+        }
       }
     }
   }

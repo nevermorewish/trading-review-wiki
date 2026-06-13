@@ -30,6 +30,35 @@
 
 > 本项目基于 Andrej Karpathy 的 <a href="https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f">LLM Wiki</a> 方法论，针对<strong>股票交易复盘场景</strong>做了大量增强，包括中文模板、交割单自动导入、FIFO 盈亏计算、快速复盘、图片支持等。
 
+## Codex CLI 工具层
+
+当前仓库同时承载桌面应用和面向 live 交易复盘知识库的 Codex CLI 工具层。CLI 的默认知识库是 `/Users/jiegege/Desktop/杰杰杰`，核心目标是把 `raw/` 原始资料、正式 `wiki/` 页面、图谱、长期纠错记忆、结构化事实和行情 SQL 组织成一个可检索、可验证、可迭代的研究系统。
+
+v0.10.5-codex-cli 的重点更新：
+
+- **Temporal Facts v1**：新增轻量 Graphiti-style 时序事实账本 `data/facts/temporal_edges.jsonl`，用 `factWrites` 独立承载会变化、会过期、会被证伪的事实。
+- **当前事实检索**：默认问答只把 active/current facts 当作普通 `[F]` 证据；失效、替代和证伪事实默认只作为历史/反证，不污染主结论。
+- **审计模式**：`ask` 和 `ask eval` 支持 `--include-invalidated`，可以显式查看历史矛盾、替代链和证伪记录。
+- **候选词表审计**：`temporal-facts audit` 会从现有 `wiki/**/*.md` 提取 Predicate / Alias / Tag / Abbreviation 候选，供人工复核，不自动改写正式 wiki。
+- **写入边界**：`ingest/apply` 仍不写 `raw/**`；`factWrites` 只能写 `data/facts/temporal_edges.jsonl`；计划规模保护改为软告警，写入 `plan-budget.json`。
+
+快速入口：
+
+```sh
+npm run codex:ingest -- temporal-facts audit \
+  --project /Users/jiegege/Desktop/杰杰杰 \
+  --limit 200
+
+npm run codex:ingest -- ask \
+  --query "最近哪些机器人产业链事实后来被反驳或替代？" \
+  --project /Users/jiegege/Desktop/杰杰杰 \
+  --sources wiki,raw,graph,facts \
+  --include-invalidated \
+  --show-sources
+```
+
+详细说明见 [docs/temporal-facts-v1.md](docs/temporal-facts-v1.md)，版本更新见 [CHANGELOG.md](CHANGELOG.md)。
+
 ## 核心功能
 
 ### 交易复盘专用
@@ -521,6 +550,8 @@ npm install
 npm run tauri dev      # 开发模式
 npm run tauri build    # 生产构建
 ```
+
+> **Windows 一键启动**：双击 `start.cmd` 即可。首次运行会自动下载 `protoc`（LanceDB 编译依赖，约 3 MB）到 `.cache/protoc/`，无需手动安装。macOS / Linux 用户请先装好 `protoc`（`brew install protobuf` / `apt install protobuf-compiler`）。
 
 ### Chrome 扩展
 

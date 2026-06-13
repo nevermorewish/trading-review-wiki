@@ -1,6 +1,6 @@
 import { load } from "@tauri-apps/plugin-store"
 import type { WikiProject } from "@/types/wiki"
-import type { LlmConfig, SearchApiConfig, EmbeddingConfig } from "@/stores/wiki-store"
+import type { LlmConfig, SearchApiConfig, EmbeddingConfig, PgConfig } from "@/stores/wiki-store"
 import type { AppTheme } from "@/types/theme"
 
 const STORE_NAME = "app-state.json"
@@ -73,6 +73,18 @@ export async function saveEmbeddingConfig(config: EmbeddingConfig): Promise<void
 export async function loadEmbeddingConfig(): Promise<EmbeddingConfig | null> {
   const store = await getStore()
   return (await store.get<EmbeddingConfig>(EMBEDDING_KEY)) ?? null
+}
+
+const PG_CONFIG_KEY = "pgConfig"
+
+export async function savePgConfig(config: PgConfig): Promise<void> {
+  const store = await getStore()
+  await store.set(PG_CONFIG_KEY, config)
+}
+
+export async function loadPgConfig(): Promise<PgConfig | null> {
+  const store = await getStore()
+  return (await store.get<PgConfig>(PG_CONFIG_KEY)) ?? null
 }
 
 export async function removeFromRecentProjects(

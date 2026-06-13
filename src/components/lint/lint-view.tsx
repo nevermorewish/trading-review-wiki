@@ -11,11 +11,12 @@ import {
   Wrench,
   Trash2,
   Scale,
+  FileCog,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useWikiStore } from "@/stores/wiki-store"
 import { useReviewStore } from "@/stores/review-store"
-import { runStructuralLint, runSemanticLint, runStrategyComplianceLint, type LintResult } from "@/lib/lint"
+import { runStructuralLint, runSemanticLint, runStrategyComplianceLint, runSchemaLint, type LintResult } from "@/lib/lint"
 import { readFile, writeFile, deleteFile, listDirectory } from "@/commands/fs"
 import { normalizePath } from "@/lib/path-utils"
 
@@ -25,6 +26,7 @@ const typeConfig: Record<string, { icon: typeof AlertTriangle; label: string }> 
   "no-outlinks": { icon: ArrowUpRight, label: "无出链" },
   semantic: { icon: BrainCircuit, label: "语义问题" },
   strategy: { icon: Scale, label: "策略一致性" },
+  schema: { icon: FileCog, label: "Schema 校验" },
 }
 
 export function LintView() {
@@ -50,7 +52,8 @@ export function LintView() {
     setResults([])
     try {
       const structural = await runStructuralLint(pp)
-      let all = structural
+      const schema = await runSchemaLint(pp)
+      let all = [...structural, ...schema]
 
       if (runSemantic && (llmConfig.apiKey || llmConfig.provider === "ollama" || llmConfig.provider === "custom")) {
         const semantic = await runSemanticLint(pp, llmConfig)

@@ -643,6 +643,34 @@ pub fn write_file(path: String, contents: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn append_file(path: String, contents: String) -> Result<(), String> {
+    use std::io::Write;
+    let p = Path::new(&path);
+    if let Some(parent) = p.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create parent dirs for '{}': {}", path, e))?;
+    }
+    const MAX_SIZE: u64 = 500 * 1024;
+    const KEEP_SIZE: usize = 200 * 1024;
+    if let Ok(meta) = fs::metadata(&path) {
+        if meta.len() > MAX_SIZE {
+            if let Ok(existing) = fs::read_to_string(&path) {
+                let start = existing.len().saturating_sub(KEEP_SIZE);
+                let trimmed = &existing[start..];
+                let _ = fs::write(&path, format!("[truncated]\n{}", trimmed));
+            }
+        }
+    }
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .map_err(|e| format!("Failed to open file '{}' for append: {}", path, e))?;
+    file.write_all(contents.as_bytes())
+        .map_err(|e| format!("Failed to append to '{}': {}", path, e))
+}
+
+#[tauri::command]
 pub fn write_binary_file(path: String, contents: Vec<u8>) -> Result<(), String> {
     let p = Path::new(&path);
     if let Some(parent) = p.parent() {
