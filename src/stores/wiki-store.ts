@@ -3,13 +3,30 @@ import type { WikiProject, FileNode } from "@/types/wiki"
 import type { AppTheme } from "@/types/theme"
 
 interface LlmConfig {
-  provider: "openai" | "anthropic" | "google" | "ollama" | "custom" | "minimax" | "kimi" | "codex"
+  provider: "openai" | "anthropic" | "google" | "ollama" | "custom" | "minimax" | "kimi" | "codex" | "frogclaw"
   apiKey: string
   model: string
   ollamaUrl: string
   customEndpoint: string
   maxContextSize: number // max context window in characters
   reasoningEffort?: "minimal" | "low" | "medium" | "high" // codex 专用
+}
+
+/**
+ * Account-based login state for a "brand" relay (frogclaw / sub2api — both New
+ * API forks). After a successful username+password login we hold the minted
+ * relay token (`sk-...`), the resolved base URL, and the account's available
+ * models. The default selected model is persisted in `defaultModel`.
+ */
+interface BrandAuth {
+  brandId: string
+  baseUrl: string
+  username: string
+  userId: number | null
+  accessToken: string
+  models: string[]
+  defaultModel: string
+  loggedIn: boolean
 }
 
 interface SearchApiConfig {
@@ -43,6 +60,7 @@ interface WikiState {
   searchApiConfig: SearchApiConfig
   embeddingConfig: EmbeddingConfig
   pgConfig: PgConfig
+  brandAuth: BrandAuth
   dataVersion: number
   appTheme: AppTheme
 
@@ -56,6 +74,7 @@ interface WikiState {
   setSearchApiConfig: (config: SearchApiConfig) => void
   setEmbeddingConfig: (config: EmbeddingConfig) => void
   setPgConfig: (config: PgConfig) => void
+  setBrandAuth: (auth: BrandAuth) => void
   bumpDataVersion: () => void
   setAppTheme: (theme: AppTheme) => void
 }
@@ -105,10 +124,22 @@ export const useWikiStore = create<WikiState>((set) => ({
     database: "",
   },
 
+  brandAuth: {
+    brandId: "frogclaw",
+    baseUrl: "",
+    username: "",
+    userId: null,
+    accessToken: "",
+    models: [],
+    defaultModel: "",
+    loggedIn: false,
+  },
+
   setLlmConfig: (llmConfig) => set({ llmConfig }),
   setSearchApiConfig: (searchApiConfig) => set({ searchApiConfig }),
   setEmbeddingConfig: (embeddingConfig) => set({ embeddingConfig }),
   setPgConfig: (pgConfig) => set({ pgConfig }),
+  setBrandAuth: (brandAuth) => set({ brandAuth }),
   bumpDataVersion: () => set((state) => ({ dataVersion: state.dataVersion + 1 })),
   setAppTheme: (appTheme) => {
     if (appTheme === "light") {
@@ -120,4 +151,4 @@ export const useWikiStore = create<WikiState>((set) => ({
   },
 }))
 
-export type { WikiState, LlmConfig, SearchApiConfig, EmbeddingConfig, PgConfig }
+export type { WikiState, LlmConfig, SearchApiConfig, EmbeddingConfig, PgConfig, BrandAuth }

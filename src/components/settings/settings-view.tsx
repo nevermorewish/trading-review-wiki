@@ -30,10 +30,18 @@ import {
   FolderTree,
   FileScan,
   Trash2,
+  LogIn,
+  LogOut,
+  UserCircle2,
 } from "lucide-react"
 import { previewProviderUrl, testLlmConnection, type LlmTestResult } from "@/lib/llm-test"
+import { BRANDS, getBrand, brandChatEndpoint } from "@/lib/brands"
+import { frogclawLogin } from "@/commands/frogclaw"
+import { saveBrandAuth } from "@/lib/project-store"
+import type { BrandAuth } from "@/stores/wiki-store"
 
 const PROVIDERS = [
+  { value: "frogclaw" as const, label: "FrogClaw (账号登录)", models: [] },
   { value: "openai" as const, label: "OpenAI", models: ["gpt-4o", "gpt-4.1", "gpt-4o-mini"] },
   { value: "anthropic" as const, label: "Anthropic", models: ["claude-sonnet-4-5-20250514", "claude-opus-4-5-20250514", "claude-haiku-4-5-20251001"] },
   { value: "google" as const, label: "Google", models: ["gemini-2.5-pro", "gemini-2.5-flash"] },
@@ -174,7 +182,23 @@ export function SettingsView() {
 
   async function handleSave() {
     const { saveLlmConfig, saveSearchApiConfig, saveEmbeddingConfig } = await import("@/lib/project-store")
-    const newConfig = { provider, apiKey, model, ollamaUrl, customEndpoint, maxContextSize, reasoningEffort }
+    // For the frogclaw brand, credentials come from the login session (brandAuth),
+    // not the manual apiKey/customEndpoint fields. Resolve them from the store.
+    const newConfig =
+      provider === "frogclaw"
+        ? (() => {
+            const auth = useWikiStore.getState().brandAuth
+            return {
+              provider,
+              apiKey: auth.accessToken,
+              model: model || auth.defaultModel,
+              ollamaUrl,
+              customEndpoint: auth.baseUrl ? brandChatEndpoint(auth.baseUrl) : "",
+              maxContextSize,
+              reasoningEffort,
+            }
+          })()
+        : { provider, apiKey, model, ollamaUrl, customEndpoint, maxContextSize, reasoningEffort }
     const newSearchConfig = { provider: searchProvider, apiKey: searchApiKey }
     const newEmbeddingConfig = { enabled: embeddingEnabled, endpoint: embeddingEndpoint, apiKey: embeddingApiKey, model: embeddingModel }
     setSearchApiConfig(newSearchConfig)
@@ -284,7 +308,9 @@ export function SettingsView() {
               </div>
             </div>
 
-            {(provider === "custom" ||
+            {provider === "frogclaw" && <BrandLoginSection model={model} setModel={setModel} />}
+
+            {provider !== "frogclaw" && (provider === "custom" ||
               provider === "minimax" ||
               provider === "openai" ||
               provider === "anthropic" ||
@@ -374,7 +400,7 @@ export function SettingsView() {
               </div>
             )}
 
-            {provider !== "ollama" && (
+            {provider !== "ollama" && provider !== "frogclaw" && (
               <div className="space-y-2">
                 <Label htmlFor="apiKey">{t("settings.apiKey")}</Label>
                 <div className="relative">
@@ -403,6 +429,7 @@ export function SettingsView() {
               </div>
             )}
 
+            {provider !== "frogclaw" && (
             <div className="space-y-2">
               <Label htmlFor="model">{t("settings.model")}</Label>
               {currentProvider && currentProvider.models.length > 0 ? (
@@ -437,6 +464,7 @@ export function SettingsView() {
                 />
               )}
             </div>
+            )}
 
             {/* Endpoint preview + connection test */}
             <div className="space-y-2 border-t pt-4">
@@ -733,6 +761,243 @@ export function SettingsView() {
       <BodyResidueDialog open={residueOpen} onOpenChange={setResidueOpen} />
       <NormalizeDirsDialog open={normalizeOpen} onOpenChange={setNormalizeOpen} />
       <CleanupGarbageDialog open={cleanupGarbageOpen} onOpenChange={setCleanupGarbageOpen} />
+    </div>
+  )
+}
+
+/**
+ * Account-based login + model picker for "brand" relays (frogclaw / sub2api).
+ * Login runs through the Rust frogclaw_login command; on success the minted
+ * relay token + model list are stored in `brandAuth` and persisted. The chosen
+ * default model flows into the saved LlmConfig when the user clicks Save.
+ */
+function BrandLoginSection({
+  model,
+  setModel,
+}: {
+  model: string
+  setModel: (m: string) => void
+}) {
+  const brandAuth = useWikiStore((s) => s.brandAuth)
+  const setBrandAuth = useWikiStore((s) => s.setBrandAuth)
+
+  const [brandId, setBrandId] = useState(brandAuth.brandId || "frogclaw")
+  const [baseUrl, setBaseUrl] = useState(
+    brandAuth.baseUrl || getBrand(brandAuth.brandId || "frogclaw").defaultBaseUrl,
+  )
+  const [username, setUsername] = useState(brandAuth.username)
+  const [password, setPassword] = useState("")
+  const [showPassword, setShowPassword] = useState(false)
+  const [loggingIn, setLoggingIn] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  // Keep the selected default model in sync with the form's model field.
+  useEffect(() => {
+    if (brandAuth.loggedIn && brandAuth.defaultModel && !model) {
+      setModel(brandAuth.defaultModel)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [brandAuth.loggedIn])
+
+  async function handleLogin() {
+    if (!baseUrl.trim()) {
+      setError("请填写服务器地址")
+      return
+    }
+    if (!username.trim() || !password) {
+      setError("请填写账号和密码")
+      return
+    }
+    setError(null)
+    setLoggingIn(true)
+    try {
+      const brand = getBrand(brandId)
+      const result = await frogclawLogin(baseUrl.trim(), username.trim(), password, brand.group)
+      const defaultModel = result.models.includes(brandAuth.defaultModel)
+        ? brandAuth.defaultModel
+        : result.models[0] ?? ""
+      const auth: BrandAuth = {
+        brandId,
+        baseUrl: baseUrl.trim().replace(/\/$/, ""),
+        username: result.username,
+        userId: result.user_id,
+        accessToken: result.access_token,
+        models: result.models,
+        defaultModel,
+        loggedIn: true,
+      }
+      setBrandAuth(auth)
+      await saveBrandAuth(auth)
+      setModel(defaultModel)
+      setPassword("")
+    } catch (err) {
+      setError(typeof err === "string" ? err : err instanceof Error ? err.message : String(err))
+    } finally {
+      setLoggingIn(false)
+    }
+  }
+
+  async function handleLogout() {
+    const auth: BrandAuth = {
+      brandId,
+      baseUrl: baseUrl.trim().replace(/\/$/, ""),
+      username: "",
+      userId: null,
+      accessToken: "",
+      models: [],
+      defaultModel: "",
+      loggedIn: false,
+    }
+    setBrandAuth(auth)
+    await saveBrandAuth(auth)
+    setModel("")
+  }
+
+  async function handlePickModel(m: string) {
+    setModel(m)
+    const auth: BrandAuth = { ...brandAuth, defaultModel: m }
+    setBrandAuth(auth)
+    await saveBrandAuth(auth)
+  }
+
+  return (
+    <div className="space-y-3 rounded-md border bg-muted/20 p-3">
+      {/* Brand selector */}
+      <div className="space-y-2">
+        <Label>品牌</Label>
+        <div className="flex flex-wrap gap-2">
+          {BRANDS.map((b) => (
+            <button
+              key={b.id}
+              disabled={brandAuth.loggedIn}
+              onClick={() => {
+                setBrandId(b.id)
+                if (!baseUrl.trim() || baseUrl === getBrand(brandId).defaultBaseUrl) {
+                  setBaseUrl(b.defaultBaseUrl)
+                }
+              }}
+              className={`rounded-md border px-3 py-1.5 text-sm transition-colors disabled:opacity-50 ${
+                brandId === b.id
+                  ? "border-primary bg-primary text-primary-foreground"
+                  : "border-border hover:bg-accent"
+              }`}
+            >
+              {b.name}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {brandAuth.loggedIn ? (
+        <>
+          {/* Logged-in account badge */}
+          <div className="flex items-center justify-between rounded-md border bg-background px-3 py-2">
+            <div className="flex items-center gap-2">
+              <UserCircle2 className="size-5 text-primary" />
+              <div className="flex flex-col">
+                <span className="text-sm font-medium">{brandAuth.username}</span>
+                <span className="text-xs text-muted-foreground">
+                  {getBrand(brandAuth.brandId).name} · {brandAuth.baseUrl}
+                </span>
+              </div>
+            </div>
+            <Button variant="outline" size="sm" onClick={handleLogout}>
+              <LogOut className="mr-1.5 size-4" />
+              退出登录
+            </Button>
+          </div>
+
+          {/* Model picker (default model = selected) */}
+          <div className="space-y-2">
+            <Label>选择模型（默认）</Label>
+            {brandAuth.models.length > 0 ? (
+              <div className="flex flex-wrap gap-2">
+                {brandAuth.models.map((m) => (
+                  <button
+                    key={m}
+                    onClick={() => handlePickModel(m)}
+                    className={`rounded-md border px-3 py-1.5 text-sm transition-colors ${
+                      model === m
+                        ? "border-primary bg-primary text-primary-foreground"
+                        : "border-border hover:bg-accent"
+                    }`}
+                  >
+                    {m}
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs text-muted-foreground">该账号暂无可用模型。</p>
+            )}
+            <Input
+              value={model}
+              onChange={(e) => handlePickModel(e.target.value)}
+              placeholder="也可手动输入模型名"
+            />
+            <p className="text-xs text-muted-foreground">
+              点击模型即设为默认。保存后用于所有 AI 调用。
+            </p>
+          </div>
+        </>
+      ) : (
+        <>
+          {/* Login form */}
+          <div className="space-y-2">
+            <Label>服务器地址</Label>
+            <Input
+              value={baseUrl}
+              onChange={(e) => setBaseUrl(e.target.value)}
+              placeholder="https://your-frogclaw-domain.com"
+            />
+            <p className="text-xs text-muted-foreground">
+              中转站根地址，无需 /v1 后缀（自动拼接）。
+            </p>
+          </div>
+          <div className="space-y-2">
+            <Label>账号</Label>
+            <Input
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              placeholder="用户名"
+              autoComplete="username"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>密码</Label>
+            <div className="relative">
+              <Input
+                type={showPassword ? "text" : "password"}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="pr-9 font-mono"
+                placeholder="密码"
+                autoComplete="current-password"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleLogin()
+                }}
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword((v) => !v)}
+                className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                aria-label={showPassword ? "隐藏密码" : "显示密码"}
+                tabIndex={-1}
+              >
+                {showPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+              </button>
+            </div>
+          </div>
+          <Button onClick={handleLogin} disabled={loggingIn} className="w-full">
+            {loggingIn ? (
+              <Loader2 className="mr-2 size-4 animate-spin" />
+            ) : (
+              <LogIn className="mr-2 size-4" />
+            )}
+            {loggingIn ? "登录中…" : "登录"}
+          </Button>
+          {error && <p className="text-xs text-red-600 break-all">{error}</p>}
+        </>
+      )}
     </div>
   )
 }

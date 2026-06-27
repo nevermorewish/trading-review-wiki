@@ -14,6 +14,7 @@ const TEST_TIMEOUT_MS = 15_000
 export function previewProviderUrl(config: LlmConfig): string | null {
   try {
     if (config.provider === "custom" && !config.customEndpoint.trim()) return null
+    if (config.provider === "frogclaw" && !config.customEndpoint.trim()) return null
     if (config.provider === "ollama" && !config.ollamaUrl.trim()) return null
     return getProviderConfig(config).url
   } catch {

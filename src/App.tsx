@@ -6,7 +6,7 @@ import { useReviewStore } from "@/stores/review-store"
 import { useChatStore } from "@/stores/chat-store"
 import { useResearchStore } from "@/stores/research-store"
 import { listDirectory, openProject, getClipServerToken } from "@/commands/fs"
-import { getLastProject, getRecentProjects, saveLastProject, loadLlmConfig, loadLanguage, loadSearchApiConfig, loadEmbeddingConfig, loadAppTheme, loadPgConfig } from "@/lib/project-store"
+import { getLastProject, getRecentProjects, saveLastProject, loadLlmConfig, loadLanguage, loadSearchApiConfig, loadEmbeddingConfig, loadAppTheme, loadPgConfig, loadBrandAuth } from "@/lib/project-store"
 import { syncStockCodes } from "@/commands/stock-codes"
 import { loadReviewItems, loadChatHistory } from "@/lib/persist"
 import { setupAutoSave, teardownAutoSave } from "@/lib/auto-save"
@@ -65,6 +65,10 @@ function App() {
         const savedPgConfig = await loadPgConfig()
         if (!cancelled && savedPgConfig) {
           useWikiStore.getState().setPgConfig(savedPgConfig)
+        }
+        const savedBrandAuth = await loadBrandAuth()
+        if (!cancelled && savedBrandAuth) {
+          useWikiStore.getState().setBrandAuth(savedBrandAuth)
         }
         const savedLang = await loadLanguage()
         if (!cancelled && savedLang) {

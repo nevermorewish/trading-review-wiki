@@ -359,6 +359,23 @@ export function getProviderConfig(config: LlmConfig): ProviderConfig {
         isOpenAiCompatible: true,
       }
 
+    case "frogclaw":
+      // frogclaw / sub2api are New API forks (OpenAI-compatible relays).
+      // customEndpoint holds the relay's /v1 base; apiKey is the minted sk- token.
+      return {
+        url: normalizeOpenAiCompatibleUrl(customEndpoint),
+        headers: {
+          "Content-Type": JSON_CONTENT_TYPE,
+          ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+        },
+        buildBody: (messages) => ({
+          ...buildOpenAiBody(messages),
+          model,
+        }),
+        parseStream: parseOpenAiLine,
+        isOpenAiCompatible: true,
+      }
+
     default: {
       const exhaustive: never = provider
       throw new Error(`Unknown provider: ${String(exhaustive)}`)
