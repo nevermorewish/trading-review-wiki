@@ -4,37 +4,20 @@
  * Both frogclaw and sub2api are New API forks (OpenAI-compatible relays), so
  * they share one login mechanism (username + password → session → relay token).
  * A "brand" is just a named server preset: a display name + default base URL +
- * token group. frogclaw is the default brand.
+ * token group. The lowest-`order` brand is the default.
  *
- * `baseUrl` is the relay root (no trailing slash). The OpenAI-compatible chat
- * endpoint lives at `${baseUrl}/v1`, which is what we store as the provider's
- * customEndpoint after login.
+ * The presets themselves live in `brands/*.json` at the repo root and are
+ * compiled into `brands.generated.ts` by `scripts/sync-brands.mjs`
+ * (`npm run brand:sync`). This module only adds the helper functions.
+ *
+ * `defaultBaseUrl` is the relay root (no trailing slash). The OpenAI-compatible
+ * chat endpoint lives at `${baseUrl}/v1`, which is what we store as the
+ * provider's customEndpoint after login.
  */
-export interface Brand {
-  id: string
-  name: string
-  /** Default relay root, e.g. "https://frogclaw.example.com". User-editable. */
-  defaultBaseUrl: string
-  /** Token group passed to /api/token/ensure-group. */
-  group: string
-}
+import { BRANDS, DEFAULT_BRAND_ID, type Brand } from "./brands.generated"
 
-export const BRANDS: Brand[] = [
-  {
-    id: "frogclaw",
-    name: "FrogClaw",
-    defaultBaseUrl: "",
-    group: "default",
-  },
-  {
-    id: "sub2api",
-    name: "Sub2API",
-    defaultBaseUrl: "",
-    group: "default",
-  },
-]
-
-export const DEFAULT_BRAND_ID = "frogclaw"
+export { BRANDS, DEFAULT_BRAND_ID }
+export type { Brand }
 
 export function getBrand(id: string): Brand {
   return BRANDS.find((b) => b.id === id) ?? BRANDS[0]

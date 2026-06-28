@@ -1,8 +1,7 @@
 import { useState, useEffect } from "react"
 import {
-  FileText, FolderOpen, Search, Network, ClipboardCheck, Settings, ArrowLeftRight, ClipboardList, Globe, TrendingUp, PenLine, BarChart3, Target,
+  FileText, FolderOpen, Search, Network, ClipboardCheck, Settings, ArrowLeftRight, ClipboardList, Globe, TrendingUp, PenLine, BarChart3, Target, Filter,
 } from "lucide-react"
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { useWikiStore } from "@/stores/wiki-store"
 import { useReviewStore } from "@/stores/review-store"
 import { useResearchStore } from "@/stores/research-store"
@@ -18,6 +17,7 @@ import {
   DialogClose,
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
+import { AccountLoginButton } from "@/components/account/account-login-button"
 
 type NavView = WikiState["activeView"] | "quick-review"
 
@@ -102,6 +102,7 @@ const NAV_ITEMS: { view: NavView; icon: typeof FileText; labelKey: string }[] = 
   { view: "graph", icon: Network, labelKey: "nav.graph" },
   { view: "dashboard", icon: BarChart3, labelKey: "nav.dashboard" },
   { view: "plan", icon: Target, labelKey: "nav.plan" },
+  { view: "screener", icon: Filter, labelKey: "nav.screener" },
   { view: "lint", icon: ClipboardCheck, labelKey: "nav.lint" },
   { view: "review", icon: ClipboardList, labelKey: "nav.review" },
 ]
@@ -191,116 +192,98 @@ export function IconSidebar({ onSwitchProject }: IconSidebarProps) {
     }
   }
 
+  const rowBase =
+    "relative flex h-9 w-full items-center gap-2.5 rounded-md px-3 text-sm transition-colors"
+  const rowActive = "bg-accent text-accent-foreground font-medium"
+  const rowIdle = "text-muted-foreground hover:bg-accent/50 hover:text-accent-foreground"
+
   return (
-    <TooltipProvider delayDuration={300}>
-      <div className="flex h-full w-12 flex-col items-center border-r bg-muted/50 py-2">
+    <>
+      <div className="flex h-full w-44 shrink-0 flex-col border-r bg-muted/50 py-2">
         {/* Logo */}
-        <div className="mb-2 flex items-center justify-center">
-          <div className="flex h-8 w-8 items-center justify-center rounded-[22%] bg-primary/10">
+        <div className="mb-2 flex items-center gap-2 px-3">
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[22%] bg-primary/10">
             <TrendingUp className="h-5 w-5 text-primary" />
           </div>
+          <span className="truncate text-sm font-semibold">交易复盘</span>
         </div>
         {/* Top: main nav items + Deep Research */}
-        <div className="flex flex-1 flex-col items-center gap-1">
+        <div className="flex flex-1 flex-col gap-0.5 px-1.5">
           {/* Quick Review */}
-          <Tooltip>
-            <TooltipTrigger
-              onClick={handleQuickReview}
-              className="relative flex h-10 w-10 items-center justify-center rounded-md transition-colors text-muted-foreground hover:bg-accent/50 hover:text-accent-foreground"
-            >
-              <PenLine className="h-5 w-5" />
-            </TooltipTrigger>
-            <TooltipContent side="right">{t("nav.quickReview")}</TooltipContent>
-          </Tooltip>
+          <button
+            onClick={handleQuickReview}
+            className={`${rowBase} ${rowIdle}`}
+          >
+            <PenLine className="h-4 w-4 shrink-0" />
+            <span className="flex-1 truncate text-left">{t("nav.quickReview")}</span>
+          </button>
 
-          <div className="my-1 h-px w-6 bg-border" />
+          <div className="my-1 h-px w-full bg-border" />
 
           {NAV_ITEMS.map(({ view, icon: Icon, labelKey }) => (
-            <Tooltip key={view}>
-              <TooltipTrigger
-                onClick={() => setActiveView(view as WikiState["activeView"])}
-                className={`relative flex h-10 w-10 items-center justify-center rounded-md transition-colors ${
-                  activeView === view
-                    ? "bg-accent text-accent-foreground"
-                    : "text-muted-foreground hover:bg-accent/50 hover:text-accent-foreground"
-                }`}
-              >
-                <Icon className="h-5 w-5" />
-                {view === "review" && pendingCount > 0 && (
-                  <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold text-primary-foreground">
-                    {pendingCount > 99 ? "99+" : pendingCount}
-                  </span>
-                )}
-              </TooltipTrigger>
-              <TooltipContent side="right">
-                {t(labelKey)}
-                {view === "review" && pendingCount > 0 && ` (${pendingCount})`}
-              </TooltipContent>
-            </Tooltip>
-          ))}
-          {/* Deep Research */}
-          <Tooltip>
-            <TooltipTrigger
-              onClick={() => toggleResearchPanel(!researchPanelOpen)}
-              className={`relative flex h-10 w-10 items-center justify-center rounded-md transition-colors ${
-                researchPanelOpen
-                  ? "bg-accent text-accent-foreground"
-                  : "text-muted-foreground hover:bg-accent/50 hover:text-accent-foreground"
-              }`}
+            <button
+              key={view}
+              onClick={() => setActiveView(view as WikiState["activeView"])}
+              className={`${rowBase} ${activeView === view ? rowActive : rowIdle}`}
             >
-              <Globe className="h-5 w-5" />
-              {researchActiveCount > 0 && (
-                <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-blue-500 px-1 text-[10px] font-bold text-white">
-                  {researchActiveCount}
+              <Icon className="h-4 w-4 shrink-0" />
+              <span className="flex-1 truncate text-left">{t(labelKey)}</span>
+              {view === "review" && pendingCount > 0 && (
+                <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold text-primary-foreground">
+                  {pendingCount > 99 ? "99+" : pendingCount}
                 </span>
               )}
-            </TooltipTrigger>
-            <TooltipContent side="right">Deep Research</TooltipContent>
-          </Tooltip>
+            </button>
+          ))}
+          {/* Deep Research */}
+          <button
+            onClick={() => toggleResearchPanel(!researchPanelOpen)}
+            className={`${rowBase} ${researchPanelOpen ? rowActive : rowIdle}`}
+          >
+            <Globe className="h-4 w-4 shrink-0" />
+            <span className="flex-1 truncate text-left">深度研究</span>
+            {researchActiveCount > 0 && (
+              <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-blue-500 px-1 text-[10px] font-bold text-white">
+                {researchActiveCount}
+              </span>
+            )}
+          </button>
         </div>
-        {/* Bottom: daemon status + settings + switch project */}
-        <div className="flex flex-col items-center gap-1 pb-1">
+        {/* Bottom: account login + daemon status + settings + switch project */}
+        <div className="flex flex-col gap-0.5 px-1.5 pb-1">
+          {/* Account login (mirrors Hermes bottom-left login area) */}
+          <AccountLoginButton />
           {/* Daemon status indicator */}
-          <Tooltip>
-            <TooltipTrigger className="flex h-6 w-6 items-center justify-center">
-              <span
-                className={`h-2.5 w-2.5 rounded-full ${
-                  daemonStatus === "running" ? "bg-emerald-500" :
-                  daemonStatus === "starting" ? "bg-amber-400 animate-pulse" :
-                  daemonStatus === "port_conflict" ? "bg-red-500" :
-                  "bg-red-500 animate-pulse"
-                }`}
-              />
-            </TooltipTrigger>
-            <TooltipContent side="right">
-              {daemonStatus === "running" && "Clip server running"}
-              {daemonStatus === "starting" && "Clip server starting..."}
-              {daemonStatus === "port_conflict" && "Port 19827 is occupied. Web Clipper unavailable."}
-              {daemonStatus === "error" && "Clip server error. Restarting..."}
-            </TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger
-              onClick={() => setActiveView("settings")}
-              className={`flex h-10 w-10 items-center justify-center rounded-md transition-colors ${
-                activeView === "settings"
-                  ? "bg-accent text-accent-foreground"
-                  : "text-muted-foreground hover:bg-accent/50 hover:text-accent-foreground"
+          <div className="flex h-7 w-full items-center gap-2.5 px-3 text-xs text-muted-foreground">
+            <span
+              className={`h-2.5 w-2.5 shrink-0 rounded-full ${
+                daemonStatus === "running" ? "bg-emerald-500" :
+                daemonStatus === "starting" ? "bg-amber-400 animate-pulse" :
+                daemonStatus === "port_conflict" ? "bg-red-500" :
+                "bg-red-500 animate-pulse"
               }`}
-            >
-              <Settings className="h-5 w-5" />
-            </TooltipTrigger>
-            <TooltipContent side="right">{t("nav.settings")}</TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger
-              onClick={onSwitchProject}
-              className="flex h-10 w-10 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent/50 hover:text-accent-foreground"
-            >
-              <ArrowLeftRight className="h-5 w-5" />
-            </TooltipTrigger>
-            <TooltipContent side="right">{t("nav.switchProject")}</TooltipContent>
-          </Tooltip>
+            />
+            <span className="flex-1 truncate">
+              {daemonStatus === "running" && "Clip 服务运行中"}
+              {daemonStatus === "starting" && "Clip 服务启动中…"}
+              {daemonStatus === "port_conflict" && "端口 19827 被占用"}
+              {daemonStatus === "error" && "Clip 服务出错，重启中…"}
+            </span>
+          </div>
+          <button
+            onClick={() => setActiveView("settings")}
+            className={`${rowBase} ${activeView === "settings" ? rowActive : rowIdle}`}
+          >
+            <Settings className="h-4 w-4 shrink-0" />
+            <span className="flex-1 truncate text-left">{t("nav.settings")}</span>
+          </button>
+          <button
+            onClick={onSwitchProject}
+            className={`${rowBase} ${rowIdle}`}
+          >
+            <ArrowLeftRight className="h-4 w-4 shrink-0" />
+            <span className="flex-1 truncate text-left">{t("nav.switchProject")}</span>
+          </button>
         </div>
       </div>
 
@@ -336,6 +319,6 @@ export function IconSidebar({ onSwitchProject }: IconSidebarProps) {
           </DialogClose>
         </DialogContent>
       </Dialog>
-    </TooltipProvider>
+    </>
   )
 }

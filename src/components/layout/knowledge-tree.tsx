@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react"
 import {
   FileText, Users, Lightbulb, BookOpen, HelpCircle, GitMerge, BarChart3, ChevronRight, ChevronDown, Layout, Globe,
+  TrendingUp, Filter, Target, Calculator, AlertTriangle, Activity, Sparkles, FileCheck2,
 } from "lucide-react"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { useWikiStore } from "@/stores/wiki-store"
@@ -11,22 +12,62 @@ import { normalizePath } from "@/lib/path-utils"
 interface WikiPageInfo {
   path: string
   title: string
-  type: string
+  group: string
   tags: string[]
   origin?: string
 }
 
-const TYPE_CONFIG: Record<string, { icon: typeof FileText; label: string; color: string; order: number }> = {
-  overview:    { icon: Layout,      label: "Overview",     color: "text-yellow-500", order: 0 },
-  entity:      { icon: Users,       label: "Entities",     color: "text-blue-500",   order: 1 },
-  concept:     { icon: Lightbulb,   label: "Concepts",     color: "text-purple-500", order: 2 },
-  source:      { icon: BookOpen,    label: "Sources",      color: "text-orange-500", order: 3 },
-  synthesis:   { icon: GitMerge,    label: "Synthesis",    color: "text-red-500",    order: 4 },
-  comparison:  { icon: BarChart3,   label: "Comparisons",  color: "text-emerald-500",order: 5 },
-  query:       { icon: HelpCircle,  label: "Queries",      color: "text-green-500",  order: 6 },
+/**
+ * Groups are keyed by the wiki **subdirectory** — the real organizing unit the
+ * ingest writes into (e.g. `wiki/股票/`, `wiki/选股/`). Both the Chinese
+ * trading-review directories and the legacy English taxonomy are mapped to an
+ * icon/label/order. Unknown directories still render as their own group
+ * (labelled by the directory name) instead of being lumped into "Other".
+ */
+const GROUP_CONFIG: Record<string, { icon: typeof FileText; label: string; color: string; order: number }> = {
+  overview:    { icon: Layout,        label: "总览",     color: "text-yellow-500",  order: 0 },
+  // Chinese (trading-review domain)
+  股票:        { icon: TrendingUp,    label: "股票",     color: "text-blue-500",    order: 1 },
+  选股:        { icon: Filter,        label: "选股",     color: "text-cyan-500",    order: 2 },
+  策略:        { icon: Target,        label: "策略",     color: "text-purple-500",  order: 3 },
+  模式:        { icon: Sparkles,      label: "模式",     color: "text-pink-500",    order: 4 },
+  公式:        { icon: Calculator,    label: "公式",     color: "text-indigo-500",  order: 5 },
+  市场环境:    { icon: Activity,      label: "市场环境", color: "text-emerald-500", order: 6 },
+  错误:        { icon: AlertTriangle, label: "错误",     color: "text-red-500",     order: 7 },
+  进化:        { icon: Sparkles,      label: "进化",     color: "text-amber-500",   order: 8 },
+  总结:        { icon: FileCheck2,    label: "总结",     color: "text-teal-500",    order: 9 },
+  概念:        { icon: Lightbulb,     label: "概念",     color: "text-purple-500",  order: 11 },
+  源文档:      { icon: BookOpen,      label: "源文档",   color: "text-orange-500",  order: 12 },
+  查询:        { icon: HelpCircle,    label: "查询",     color: "text-green-500",   order: 15 },
+  // English (legacy / generic taxonomy)
+  entities:    { icon: Users,         label: "实体",     color: "text-blue-500",    order: 10 },
+  concepts:    { icon: Lightbulb,     label: "概念",     color: "text-purple-500",  order: 11 },
+  sources:     { icon: BookOpen,      label: "源文档",   color: "text-orange-500",  order: 12 },
+  synthesis:   { icon: GitMerge,      label: "综合",     color: "text-red-500",     order: 13 },
+  comparisons: { icon: BarChart3,     label: "对比",     color: "text-emerald-500", order: 14 },
+  queries:     { icon: HelpCircle,    label: "查询",     color: "text-green-500",   order: 15 },
 }
 
-const DEFAULT_CONFIG = { icon: FileText, label: "Other", color: "text-muted-foreground", order: 99 }
+const UNKNOWN_ORDER = 50
+const OTHER_CONFIG = { icon: FileText, label: "其他", color: "text-muted-foreground", order: 99 }
+
+/** Resolve display config for a group key, falling back to the dir name itself. */
+function configFor(group: string) {
+  if (group === "__other__") return OTHER_CONFIG
+  return GROUP_CONFIG[group] ?? { icon: FileText, label: group, color: "text-muted-foreground", order: UNKNOWN_ORDER }
+}
+
+/** First path segment under `wiki/` — the page's group. `overview.md` is special. */
+function wikiGroupOf(path: string): string {
+  const norm = path.replace(/\\/g, "/")
+  const idx = norm.lastIndexOf("/wiki/")
+  if (idx === -1) return "__other__"
+  const parts = norm.slice(idx + "/wiki/".length).split("/").filter(Boolean)
+  if (parts.length <= 1) {
+    return parts[0]?.toLowerCase() === "overview.md" ? "overview" : "__other__"
+  }
+  return parts[0]
+}
 
 export function KnowledgeTree() {
   const project = useWikiStore((s) => s.project)
@@ -34,7 +75,9 @@ export function KnowledgeTree() {
   const setSelectedFile = useWikiStore((s) => s.setSelectedFile)
   const fileTree = useWikiStore((s) => s.fileTree)
   const [pages, setPages] = useState<WikiPageInfo[]>([])
-  const [expandedTypes, setExpandedTypes] = useState<Set<string>>(new Set(["overview", "entity", "concept", "source"]))
+  // Track collapsed groups (inverse of expanded) so newly-discovered Chinese
+  // directories default to open instead of needing to be in a hardcoded list.
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
 
   const loadPages = useCallback(async () => {
     if (!project) return
@@ -55,7 +98,7 @@ export function KnowledgeTree() {
           pageInfos.push({
             path: file.path,
             title: file.name.replace(".md", "").replace(/-/g, " "),
-            type: "other",
+            group: wikiGroupOf(file.path),
             tags: [],
           })
         }
@@ -75,31 +118,32 @@ export function KnowledgeTree() {
   if (!project) {
     return (
       <div className="flex h-full items-center justify-center p-4 text-sm text-muted-foreground">
-        No project open
+        未打开项目
       </div>
     )
   }
 
-  // Group pages by type
+  // Group pages by their wiki subdirectory
   const grouped = new Map<string, WikiPageInfo[]>()
   for (const page of pages) {
-    const list = grouped.get(page.type) ?? []
+    const list = grouped.get(page.group) ?? []
     list.push(page)
-    grouped.set(page.type, list)
+    grouped.set(page.group, list)
   }
 
-  // Sort groups by configured order
+  // Sort groups by configured order, then alphabetically by label
   const sortedGroups = [...grouped.entries()].sort((a, b) => {
-    const orderA = TYPE_CONFIG[a[0]]?.order ?? DEFAULT_CONFIG.order
-    const orderB = TYPE_CONFIG[b[0]]?.order ?? DEFAULT_CONFIG.order
-    return orderA - orderB
+    const ca = configFor(a[0])
+    const cb = configFor(b[0])
+    if (ca.order !== cb.order) return ca.order - cb.order
+    return ca.label.localeCompare(cb.label)
   })
 
-  function toggleType(type: string) {
-    setExpandedTypes((prev) => {
+  function toggleType(group: string) {
+    setCollapsedGroups((prev) => {
       const next = new Set(prev)
-      if (next.has(type)) next.delete(type)
-      else next.add(type)
+      if (next.has(group)) next.delete(group)
+      else next.add(group)
       return next
     })
   }
@@ -113,19 +157,19 @@ export function KnowledgeTree() {
 
         {sortedGroups.length === 0 && (
           <div className="px-2 py-4 text-center text-xs text-muted-foreground">
-            No wiki pages yet. Import sources to get started.
+            暂无知识库页面，导入资料后开始。
           </div>
         )}
 
-        {sortedGroups.map(([type, items]) => {
-          const config = TYPE_CONFIG[type] ?? DEFAULT_CONFIG
+        {sortedGroups.map(([group, items]) => {
+          const config = configFor(group)
           const Icon = config.icon
-          const isExpanded = expandedTypes.has(type)
+          const isExpanded = !collapsedGroups.has(group)
 
           return (
-            <div key={type} className="mb-1">
+            <div key={group} className="mb-1">
               <button
-                onClick={() => toggleType(type)}
+                onClick={() => toggleType(group)}
                 className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-sm hover:bg-accent/50"
               >
                 {isExpanded ? (
@@ -200,7 +244,7 @@ function RawSourcesSection() {
           <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
         )}
         <BookOpen className="h-3.5 w-3.5 shrink-0 text-amber-600" />
-        <span className="flex-1 text-left font-medium text-muted-foreground">Raw Sources</span>
+        <span className="flex-1 text-left font-medium text-muted-foreground">原始资料</span>
         <span className="text-xs text-muted-foreground">{sources.length}</span>
       </button>
       {expanded && (
@@ -228,7 +272,6 @@ function RawSourcesSection() {
 }
 
 function parsePageInfo(path: string, fileName: string, content: string): WikiPageInfo {
-  let type = "other"
   let title = fileName.replace(".md", "").replace(/-/g, " ")
   const tags: string[] = []
   let origin: string | undefined
@@ -237,8 +280,6 @@ function parsePageInfo(path: string, fileName: string, content: string): WikiPag
   const fmMatch = content.match(/^---\n([\s\S]*?)\n---/)
   if (fmMatch) {
     const fm = fmMatch[1]
-    const typeMatch = fm.match(/^type:\s*(.+)$/m)
-    if (typeMatch) type = typeMatch[1].trim().toLowerCase()
 
     const titleMatch = fm.match(/^title:\s*["']?(.+?)["']?\s*$/m)
     if (titleMatch) title = titleMatch[1].trim()
@@ -258,18 +299,8 @@ function parsePageInfo(path: string, fileName: string, content: string): WikiPag
     if (headingMatch) title = headingMatch[1].trim()
   }
 
-  // Fallback: infer type from path
-  if (type === "other") {
-    if (path.includes("/entities/")) type = "entity"
-    else if (path.includes("/concepts/")) type = "concept"
-    else if (path.includes("/sources/")) type = "source"
-    else if (path.includes("/queries/")) type = "query"
-    else if (path.includes("/comparisons/")) type = "comparison"
-    else if (path.includes("/synthesis/")) type = "synthesis"
-    else if (fileName === "overview.md") type = "overview"
-  }
-
-  return { path, title, type, tags, origin }
+  // Group by the wiki subdirectory — the real organizing unit (Chinese or not).
+  return { path, title, group: wikiGroupOf(path), tags, origin }
 }
 
 function flattenMdFiles(nodes: FileNode[]): FileNode[] {

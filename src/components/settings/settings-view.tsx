@@ -33,7 +33,9 @@ import {
   LogIn,
   LogOut,
   UserCircle2,
+  ExternalLink,
 } from "lucide-react"
+import { invoke } from "@tauri-apps/api/core"
 import { previewProviderUrl, testLlmConnection, type LlmTestResult } from "@/lib/llm-test"
 import { BRANDS, getBrand, brandChatEndpoint } from "@/lib/brands"
 import { frogclawLogin } from "@/commands/frogclaw"
@@ -765,6 +767,15 @@ export function SettingsView() {
   )
 }
 
+/** Open a URL in the system browser via the Tauri opener plugin (falls back to window.open). */
+async function openExternal(url: string) {
+  try {
+    await invoke("plugin:opener|open_url", { url })
+  } catch {
+    window.open(url, "_blank", "noopener,noreferrer")
+  }
+}
+
 /**
  * Account-based login + model picker for "brand" relays (frogclaw / sub2api).
  * Login runs through the Rust frogclaw_login command; on success the minted
@@ -901,10 +912,22 @@ function BrandLoginSection({
                 </span>
               </div>
             </div>
-            <Button variant="outline" size="sm" onClick={handleLogout}>
-              <LogOut className="mr-1.5 size-4" />
-              退出登录
-            </Button>
+            <div className="flex items-center gap-2">
+              {getBrand(brandAuth.brandId).rechargeUrl && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => openExternal(getBrand(brandAuth.brandId).rechargeUrl)}
+                >
+                  <ExternalLink className="mr-1.5 size-4" />
+                  充值
+                </Button>
+              )}
+              <Button variant="outline" size="sm" onClick={handleLogout}>
+                <LogOut className="mr-1.5 size-4" />
+                退出登录
+              </Button>
+            </div>
           </div>
 
           {/* Model picker (default model = selected) */}
@@ -916,6 +939,7 @@ function BrandLoginSection({
                   <button
                     key={m}
                     onClick={() => handlePickModel(m)}
+                    title={getBrand(brandAuth.brandId).accountModelDescriptions[m] ?? m}
                     className={`rounded-md border px-3 py-1.5 text-sm transition-colors ${
                       model === m
                         ? "border-primary bg-primary text-primary-foreground"
@@ -952,6 +976,16 @@ function BrandLoginSection({
             <p className="text-xs text-muted-foreground">
               中转站根地址，无需 /v1 后缀（自动拼接）。
             </p>
+            {getBrand(brandId).registerUrl && (
+              <button
+                type="button"
+                onClick={() => openExternal(getBrand(brandId).registerUrl)}
+                className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+              >
+                <ExternalLink className="size-3" />
+                还没有账号？注册
+              </button>
+            )}
           </div>
           <div className="space-y-2">
             <Label>账号</Label>

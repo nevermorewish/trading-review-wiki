@@ -1,0 +1,11 @@
+{
+  "id": "sub2api",
+  "name": "Sub2API",
+  "defaultBaseUrl": "",
+  "group": "default",
+  "order": 1,
+  "registerUrl": "",
+  "rechargeUrl": "",
+  "accountDefaultModels": [],
+  "accountModelDescriptions": {}
+}
