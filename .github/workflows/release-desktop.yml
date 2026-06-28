@@ -146,7 +146,13 @@ jobs:
         run: npm ci
 
       - name: Build Windows installer
-        run: npm run tauri -- build --bundles nsis --target $env:TARGET
+        # brand:sync rewrites src-tauri/tauri.conf.json (productName / identifier
+        # / window title) for $BRAND. It MUST run before `tauri build` because
+        # Tauri reads its config at startup — a sync deferred to beforeBuildCommand
+        # would be too late to change the NSIS install dir or app id.
+        run: |
+          npm run brand:sync
+          npm run tauri -- build --bundles nsis --target $env:TARGET
 
       - name: Upload installer to GitHub Release
         env:

@@ -1,7 +1,7 @@
 [package]
 name = "trading-review-wiki"
-version = "1.0.1"
-description = "寰星Agent - A personal trading knowledge base powered by LLM"
+version = "1.0.2"
+description = "HuanxingReview trading knowledge base"
 authors = []
 edition = "2021"
 

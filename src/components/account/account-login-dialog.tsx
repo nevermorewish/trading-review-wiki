@@ -12,7 +12,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { useWikiStore, type BrandAuth, type LlmConfig } from "@/stores/wiki-store"
-import { BRANDS, DEFAULT_BRAND_ID, brandChatEndpoint, getBrand } from "@/lib/brands"
+import { BRAND, brandChatEndpoint, getBrand } from "@/lib/brands"
 import { frogclawLogin } from "@/commands/frogclaw"
 import { saveBrandAuth, saveLlmConfig } from "@/lib/project-store"
 
@@ -147,10 +147,9 @@ export function AccountLoginDialog({
   const setLlmConfig = useWikiStore((s) => s.setLlmConfig)
 
   const [step, setStep] = useState<Step>("credentials")
-  const [brandId, setBrandId] = useState(brandAuth.brandId || DEFAULT_BRAND_ID)
-  const [baseUrl, setBaseUrl] = useState(
-    brandAuth.baseUrl || getBrand(brandAuth.brandId || DEFAULT_BRAND_ID).defaultBaseUrl,
-  )
+  // Single-brand build: the brand is fixed at build time, no longer selectable.
+  const brandId = BRAND.id
+  const [baseUrl, setBaseUrl] = useState(brandAuth.baseUrl || BRAND.defaultBaseUrl)
   const [username, setUsername] = useState(brandAuth.username)
   const [password, setPassword] = useState("")
   const [showPassword, setShowPassword] = useState(false)
@@ -173,9 +172,7 @@ export function AccountLoginDialog({
     if (initializedForOpen.current) return
     initializedForOpen.current = true
 
-    const authBrandId = brandAuth.brandId || DEFAULT_BRAND_ID
-    const authBrand = getBrand(authBrandId)
-    setBrandId(authBrandId)
+    const authBrand = BRAND
     setBaseUrl(brandAuth.baseUrl || authBrand.defaultBaseUrl)
     setUsername(brandAuth.username)
     setPassword("")
@@ -305,30 +302,6 @@ export function AccountLoginDialog({
 
         {step === "credentials" ? (
           <div className="space-y-4">
-            <div className="space-y-2">
-              <Label>品牌</Label>
-              <div className="flex flex-wrap gap-2">
-                {BRANDS.map((b) => (
-                  <button
-                    key={b.id}
-                    type="button"
-                    onClick={() => {
-                      setBrandId(b.id)
-                      const previousDefault = getBrand(brandId).defaultBaseUrl
-                      if (!baseUrl.trim() || baseUrl === previousDefault) setBaseUrl(b.defaultBaseUrl)
-                    }}
-                    className={`rounded-md border px-3 py-1.5 text-sm transition-colors ${
-                      brandId === b.id
-                        ? "border-primary bg-primary text-primary-foreground"
-                        : "border-border hover:bg-accent"
-                    }`}
-                  >
-                    {b.name}
-                  </button>
-                ))}
-              </div>
-            </div>
-
             <div className="space-y-2">
               <Label>服务地址</Label>
               <Input
