@@ -1,4 +1,4 @@
-# Trading Review Wiki 更新日志
+# 寰星Agent 更新日志
 
 > 版本发布历史，按时间倒序排列。
 
@@ -43,7 +43,7 @@
 
 ## v0.10.4-codex-cli — 2026-06-08
 
-> Codex CLI 分支专项更新：把 Trading Review Wiki 从“桌面知识库 + 摄入工具”推进到“交易研究自动化 CLI”。本版重点是多源 RAG、schema-aware 检索、raw 去噪、ingest 候选分段召回、股票 SQL 量价验证、daily-loop 锚定验证、vector 维护和 wiki housekeeping。
+> Codex CLI 分支专项更新：把 寰星Agent 从“桌面知识库 + 摄入工具”推进到“交易研究自动化 CLI”。本版重点是多源 RAG、schema-aware 检索、raw 去噪、ingest 候选分段召回、股票 SQL 量价验证、daily-loop 锚定验证、vector 维护和 wiki housekeeping。
 
 ### 新功能（Feature）
 
@@ -835,7 +835,7 @@
 
 | 文件名 | 说明 |
 |--------|------|
-| `Trading Review Wiki_x.x.x_x64-setup.exe` | **推荐** — NSIS 安装程序，支持自定义安装路径与卸载 |
-| `Trading Review Wiki_x.x.x_x64_en-US.msi` | Windows Installer 包，适合企业批量部署 |
+| `寰星Agent_x.x.x_x64-setup.exe` | **推荐** — NSIS 安装程序，支持自定义安装路径与卸载 |
+| `寰星Agent_x.x.x_x64_en-US.msi` | Windows Installer 包，适合企业批量部署 |
 
 > 所有安装包均不含数字签名，首次安装时 Windows 可能会弹出「未知发布者」提示，点击「更多信息」→「仍要运行」即可。

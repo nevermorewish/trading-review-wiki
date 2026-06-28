@@ -1,6 +1,6 @@
 # Temporal Facts v1
 
-Temporal Facts 是 Trading Review Wiki 的时间事实账本。它不替代 `wiki/**/*.md`，只把会随时间变化、需要验证或可能被证伪的交易事实写入 `data/facts/temporal_edges.jsonl`。
+Temporal Facts 是 寰星Agent 的时间事实账本。它不替代 `wiki/**/*.md`，只把会随时间变化、需要验证或可能被证伪的交易事实写入 `data/facts/temporal_edges.jsonl`。
 
 ## 已确认口径
 

@@ -37,6 +37,7 @@ pub fn run() {
             commands::fs::create_directory,
             commands::fs::rename_file,
             commands::http::post_json_via_native_http,
+            commands::frogclaw::frogclaw_login,
             commands::project::create_project,
             commands::project::open_project,
             clip_server_status,

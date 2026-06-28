@@ -1,7 +1,7 @@
-# 交易评论维基 · Trading Review Wiki
+# 交易评论维基 · 寰星Agent
 
 <p align="center">
-  <img src="logo.jpg" width="128" height="128" style="border-radius: 22%;" alt="Trading Review Wiki Logo">
+  <img src="logo.jpg" width="128" height="128" style="border-radius: 22%;" alt="寰星Agent Logo">
 </p>
 
 <p align="center">
@@ -38,7 +38,7 @@
 
 当前 `main` 分支重点是面向本地交易复盘知识库的 Codex CLI 工具层。CLI 的目标是把 `raw/` 原始资料、正式 `wiki/` 页面、图谱、长期纠错记忆、结构化事实和可选只读行情 SQL 组织成一个可检索、可验证、可迭代的研究系统。
 
-如果你想使用之前的 Tauri 桌面应用，而不是 CLI 自动化工具链，可以继续从 [GitHub Releases](https://github.com/ymj8903668-droid/trading-review-wiki/releases) 下载历史桌面版构建。桌面版保留三栏 Wiki UI、快速复盘、交割单导入、图谱视图、设置面板和 Save to Wiki 工作流。
+如果你想使用之前的 Tauri 桌面应用，而不是 CLI 自动化工具链，可以继续从 [GitHub Releases](https://github.com/your-org/huanxing-agent/releases) 下载历史桌面版构建。桌面版保留三栏 Wiki UI、快速复盘、交割单导入、图谱视图、设置面板和 Save to Wiki 工作流。
 
 v0.10.5-codex-cli 的重点更新：
 
@@ -52,12 +52,12 @@ v0.10.5-codex-cli 的重点更新：
 
 ```sh
 npm run codex:ingest -- temporal-facts audit \
-  --project /path/to/your/trading-review-wiki-project \
+  --project /path/to/your/寰星Agent-project \
   --limit 200
 
 npm run codex:ingest -- ask \
   --query "最近哪些机器人产业链事实后来被反驳或替代？" \
-  --project /path/to/your/trading-review-wiki-project \
+  --project /path/to/your/寰星Agent-project \
   --sources wiki,raw,graph,facts \
   --include-invalidated \
   --show-sources
@@ -87,7 +87,7 @@ npm run codex:ingest -- ask \
 
 ### OpenClaw 协作（可选）
 
-将 Trading Review Wiki 与 [OpenClaw](https://github.com/nashsu/openclaw) 多 Agent 系统打通，实现每日盘后自动复盘：
+将 寰星Agent 与 [OpenClaw](https://github.com/nashsu/openclaw) 多 Agent 系统打通，实现每日盘后自动复盘：
 
 ```
 交易日收盘                    OpenClaw 18:00              用户查看
@@ -145,7 +145,7 @@ npm run codex:ingest -- ask \
 
 ## 下载
 
-- **桌面版历史构建**：从 [GitHub Releases](https://github.com/ymj8903668-droid/trading-review-wiki/releases) 下载 Windows 安装包或 macOS `.dmg`。
+- **桌面版历史构建**：从 [GitHub Releases](https://github.com/your-org/huanxing-agent/releases) 下载 Windows 安装包或 macOS `.dmg`。
 - **CLI 工具层**：当前 `main` 分支面向源码运行和 Codex 自动化，不等同于桌面版 release artifact。
   - ⚠️ **注意**：当前版本未进行 Apple 代码签名，首次打开可能提示"已损坏"。绕过方法：终端执行 `xattr -c /Applications/Trading\ Review\ Wiki.app`，或右键 → 打开。
 

@@ -1,5 +1,5 @@
 import { useRef, useState, useCallback, useMemo, useEffect } from "react"
-import { Send, Square, Paperclip, X } from "lucide-react"
+import { Bot, ChevronDown, Send, Square, Paperclip, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 
 interface ChatInputProps {
@@ -7,9 +7,22 @@ interface ChatInputProps {
   onStop: () => void
   isStreaming: boolean
   placeholder?: string
+  models?: string[]
+  selectedModel?: string
+  brandName?: string
+  onOpenModelPicker?: () => void
 }
 
-export function ChatInput({ onSend, onStop, isStreaming, placeholder }: ChatInputProps) {
+export function ChatInput({
+  onSend,
+  onStop,
+  isStreaming,
+  placeholder,
+  models = [],
+  selectedModel = "",
+  brandName,
+  onOpenModelPicker,
+}: ChatInputProps) {
   const [value, setValue] = useState("")
   const [images, setImages] = useState<File[]>([])
   const [isDragging, setIsDragging] = useState(false)
@@ -143,6 +156,19 @@ export function ChatInput({ onSend, onStop, isStreaming, placeholder }: ChatInpu
         >
           <Paperclip className="h-4 w-4" />
         </Button>
+        {(models.length > 0 || onOpenModelPicker) && (
+          <button
+            type="button"
+            className="flex h-9 max-w-[150px] shrink-0 items-center gap-1.5 rounded-md border bg-background px-2 text-left text-xs outline-none transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50 sm:max-w-[190px]"
+            disabled={isStreaming || models.length === 0}
+            title={`${brandName ? `${brandName} · ` : ""}${selectedModel || "选择模型"}`}
+            onClick={onOpenModelPicker}
+          >
+            <Bot className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            <span className="min-w-0 truncate">{selectedModel || "模型"}</span>
+            <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          </button>
+        )}
         <textarea
           ref={textareaRef}
           value={value}

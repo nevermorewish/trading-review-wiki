@@ -8,6 +8,7 @@ import { SearchView } from "@/components/search/search-view"
 import { GraphView } from "@/components/graph/graph-view"
 import { DashboardView } from "@/components/dashboard/dashboard-view"
 import { PlanAuditView } from "@/components/plan/plan-audit-view"
+import { ScreenerView } from "@/components/screener/screener-view"
 
 export function ContentArea() {
   const activeView = useWikiStore((s) => s.activeView)
@@ -29,6 +30,8 @@ export function ContentArea() {
       return <DashboardView />
     case "plan":
       return <PlanAuditView />
+    case "screener":
+      return <ScreenerView />
     default:
       return <ChatPanel />
   }

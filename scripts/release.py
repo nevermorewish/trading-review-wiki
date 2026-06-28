@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Trading Review Wiki 一键发布脚本
+寰星Agent 一键发布脚本
 
 用法:
   python scripts/release.py <version> [--message "变更简述"]
@@ -176,7 +176,7 @@ def patch_release_body(pat, tag, version, message):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Trading Review Wiki 一键发布")
+    parser = argparse.ArgumentParser(description="寰星Agent 一键发布")
     parser.add_argument("version", help="版本号，例如 0.5.5")
     parser.add_argument("--message", "-m", default="日常更新与问题修复", help="CHANGELOG / Release 简述")
     args = parser.parse_args()

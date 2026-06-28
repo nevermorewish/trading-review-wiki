@@ -1,5 +1,6 @@
 pub mod body_residue;
 pub mod cleanup_garbage;
+pub mod frogclaw;
 pub mod fs;
 pub mod http;
 pub mod migrate;

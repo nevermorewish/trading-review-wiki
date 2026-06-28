@@ -1,10 +1,10 @@
 # Codex CLI 外部接入与使用指南
 
-这份文档说明如何把 Trading Review Wiki Codex CLI 当作一个通用知识库引擎使用。它不要求调用方一定是 Codex；OpenClaw、龙虾、Shell 定时任务、Python 服务、Node 服务、桌面应用和其它 Agent 都可以通过子进程调用它。
+这份文档说明如何把 寰星Agent Codex CLI 当作一个通用知识库引擎使用。它不要求调用方一定是 Codex；OpenClaw、龙虾、Shell 定时任务、Python 服务、Node 服务、桌面应用和其它 Agent 都可以通过子进程调用它。
 
 ## 1. 这套 CLI 是什么
 
-它是围绕本地 Trading Review Wiki 工作区运行的一组命令行能力：
+它是围绕本地 寰星Agent 工作区运行的一组命令行能力：
 
 - 把 `raw/**` 原始资料变成可审阅、可回滚的 `wiki/**/*.md` 更新。
 - 对 `wiki / raw / graph / facts / brain / stock_daily_sql` 做三档检索问答：`search`、`smart-search`、`ask`。
@@ -231,7 +231,7 @@ npm run codex:ingest -- <command> [args...]
 
 | 项 | 说明 |
 |---|---|
-| `cwd` | 本仓库根目录，例如 `/path/to/trading-review-wiki` |
+| `cwd` | 本仓库根目录，例如 `/path/to/寰星Agent` |
 | `--project` | 本地知识库工作区，例如 `/path/to/wiki-project` |
 | 环境变量 | 只放本地私有配置，例如 LLM 凭据、SQL 私有配置路径 |
 
@@ -245,7 +245,7 @@ import { spawn } from "node:child_process";
 function runWikiCli(args, options = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn("npm", ["run", "codex:ingest", "--", ...args], {
-      cwd: "/path/to/trading-review-wiki",
+      cwd: "/path/to/寰星Agent",
       env: process.env,
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -283,7 +283,7 @@ import subprocess
 def run_wiki_cli(args):
     completed = subprocess.run(
         ["npm", "run", "codex:ingest", "--", *args],
-        cwd="/path/to/trading-review-wiki",
+        cwd="/path/to/寰星Agent",
         text=True,
         capture_output=True,
         env=os.environ.copy(),

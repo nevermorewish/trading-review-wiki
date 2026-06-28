@@ -32,8 +32,11 @@ import {
   Trash2,
 } from "lucide-react"
 import { previewProviderUrl, testLlmConnection, type LlmTestResult } from "@/lib/llm-test"
+import { brandChatEndpoint, getBrand } from "@/lib/brands"
+import { AccountLoginDialog } from "@/components/account/account-login-dialog"
 
 const PROVIDERS = [
+  { value: "frogclaw" as const, label: "FrogClaw (账号登录)", models: [] },
   { value: "openai" as const, label: "OpenAI", models: ["gpt-4o", "gpt-4.1", "gpt-4o-mini"] },
   { value: "anthropic" as const, label: "Anthropic", models: ["claude-sonnet-4-5-20250514", "claude-opus-4-5-20250514", "claude-haiku-4-5-20251001"] },
   { value: "google" as const, label: "Google", models: ["gemini-2.5-pro", "gemini-2.5-flash"] },
@@ -174,7 +177,23 @@ export function SettingsView() {
 
   async function handleSave() {
     const { saveLlmConfig, saveSearchApiConfig, saveEmbeddingConfig } = await import("@/lib/project-store")
-    const newConfig = { provider, apiKey, model, ollamaUrl, customEndpoint, maxContextSize, reasoningEffort }
+    // For the frogclaw brand, credentials come from the login session (brandAuth),
+    // not the manual apiKey/customEndpoint fields. Resolve them from the store.
+    const newConfig =
+      provider === "frogclaw"
+        ? (() => {
+            const auth = useWikiStore.getState().brandAuth
+            return {
+              provider,
+              apiKey: auth.accessToken,
+              model: model || auth.defaultModel,
+              ollamaUrl,
+              customEndpoint: auth.baseUrl ? brandChatEndpoint(auth.baseUrl) : "",
+              maxContextSize,
+              reasoningEffort,
+            }
+          })()
+        : { provider, apiKey, model, ollamaUrl, customEndpoint, maxContextSize, reasoningEffort }
     const newSearchConfig = { provider: searchProvider, apiKey: searchApiKey }
     const newEmbeddingConfig = { enabled: embeddingEnabled, endpoint: embeddingEndpoint, apiKey: embeddingApiKey, model: embeddingModel }
     setSearchApiConfig(newSearchConfig)
@@ -284,7 +303,9 @@ export function SettingsView() {
               </div>
             </div>
 
-            {(provider === "custom" ||
+            {provider === "frogclaw" && <BrandLoginSection />}
+
+            {provider !== "frogclaw" && (provider === "custom" ||
               provider === "minimax" ||
               provider === "openai" ||
               provider === "anthropic" ||
@@ -374,7 +395,7 @@ export function SettingsView() {
               </div>
             )}
 
-            {provider !== "ollama" && (
+            {provider !== "ollama" && provider !== "frogclaw" && (
               <div className="space-y-2">
                 <Label htmlFor="apiKey">{t("settings.apiKey")}</Label>
                 <div className="relative">
@@ -403,6 +424,7 @@ export function SettingsView() {
               </div>
             )}
 
+            {provider !== "frogclaw" && (
             <div className="space-y-2">
               <Label htmlFor="model">{t("settings.model")}</Label>
               {currentProvider && currentProvider.models.length > 0 ? (
@@ -437,6 +459,7 @@ export function SettingsView() {
                 />
               )}
             </div>
+            )}
 
             {/* Endpoint preview + connection test */}
             <div className="space-y-2 border-t pt-4">
@@ -737,6 +760,40 @@ export function SettingsView() {
   )
 }
 
+function BrandLoginSection() {
+  const [open, setOpen] = useState(false)
+  const brandAuth = useWikiStore((s) => s.brandAuth)
+  const brand = getBrand(brandAuth.brandId)
+
+  return (
+    <div className="space-y-3 rounded-md border bg-muted/20 p-3">
+      {brandAuth.loggedIn ? (
+        <div className="space-y-3">
+          <div className="rounded-md border bg-background px-3 py-2">
+            <div className="text-sm font-medium">{brandAuth.username}</div>
+            <div className="mt-0.5 truncate text-xs text-muted-foreground">
+              {brand.name} · {brandAuth.baseUrl}
+            </div>
+            <div className="mt-1 truncate text-xs text-muted-foreground">
+              默认模型：{brandAuth.defaultModel || "未选择"}
+            </div>
+          </div>
+          <Button type="button" variant="outline" onClick={() => setOpen(true)} className="w-full">
+            重新选择账号模型
+          </Button>
+        </div>
+      ) : (
+        <Button type="button" onClick={() => setOpen(true)} className="w-full">
+          登录账号并选择模型
+        </Button>
+      )}
+      <p className="text-xs text-muted-foreground">
+        账号登录和模型选择与侧栏、对话窗口共用同一套 Hermes 流程。保存模型后会自动写入当前 LLM 配置。
+      </p>
+      <AccountLoginDialog open={open} onOpenChange={setOpen} configuredModels={brandAuth.models} />
+    </div>
+  )
+}
 // Context size presets matching common model context windows
 const CONTEXT_PRESETS = [
   { value: 4096, label: "4K" },

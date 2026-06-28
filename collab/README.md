@@ -1,7 +1,7 @@
-# OpenClaw × Trading Review Wiki 协作包
+# OpenClaw × 寰星Agent 协作包
 
 > 版本：v0.7.6（跟随主程序版本）
-> 将 OpenClaw 多 Agent 自动化与 Trading Review Wiki 知识库打通，实现每日盘后自动复盘。
+> 将 OpenClaw 多 Agent 自动化与 寰星Agent 知识库打通，实现每日盘后自动复盘。
 
 ---
 
@@ -116,7 +116,7 @@ Get-ChildItem "raw/openclaw数据/archive" -Recurse | Where-Object { $_.LastWrit
 
 ## 与主程序的关系
 
-本协作包是 **Trading Review Wiki 的 optional 扩展**，不依赖主程序代码，仅通过文件系统与 Wiki 工作区交互：
+本协作包是 **寰星Agent 的 optional 扩展**，不依赖主程序代码，仅通过文件系统与 Wiki 工作区交互：
 
 - **OpenClaw 只写**：`raw/openclaw数据/` 和 `wiki/position-tracking.md`
 - **Wiki LLM 只读**：`raw/` 中的文件，输出到 `wiki/`

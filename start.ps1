@@ -1,4 +1,4 @@
-﻿# Trading Review Wiki - 启动脚本
+# 寰星Agent - 启动脚本
 # 用法：右键 -> 使用 PowerShell 运行，或在终端执行  .\start.ps1
 
 $ErrorActionPreference = "Stop"
@@ -6,7 +6,7 @@ Set-Location -Path $PSScriptRoot
 
 Write-Host ""
 Write-Host "==========================================" -ForegroundColor Cyan
-Write-Host "  Trading Review Wiki - 开发模式启动中" -ForegroundColor Cyan
+Write-Host "  寰星Agent - 开发模式启动中" -ForegroundColor Cyan
 Write-Host "==========================================" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "工作目录：$PSScriptRoot" -ForegroundColor DarkGray

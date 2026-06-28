@@ -1,5 +1,5 @@
 /**
- * Trading Review Wiki - 文件整理脚本
+ * 寰星Agent - 文件整理脚本
  * =====================================
  * 根据 frontmatter type 自动将 wiki 根目录下的 .md 文件移动到对应分类目录
  *
@@ -99,7 +99,7 @@ function escapeRegex(str) {
 
 function showHelp() {
   console.log(`
-Trading Review Wiki 文件整理脚本
+寰星Agent 文件整理脚本
 =================================
 
 用法: node reorganize-wiki.cjs <wiki目录路径> [选项]
@@ -274,7 +274,7 @@ function main() {
   console.log(`   移动了 ${moves.length} 个文件`)
   console.log(`   更新了 ${updatedCount} 个文件中的引用`)
   console.log(`\n⚠️  提示:`)
-  console.log(`   1. 重新打开 Trading Review Wiki 应用刷新文件树`)
+  console.log(`   1. 重新打开 寰星Agent 应用刷新文件树`)
   console.log(`   2. 检查跳过的文件，手动处理重复项和无 type 的文件`)
 }
 

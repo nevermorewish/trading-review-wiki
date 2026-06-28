@@ -1,6 +1,6 @@
 import { load } from "@tauri-apps/plugin-store"
 import type { WikiProject } from "@/types/wiki"
-import type { LlmConfig, SearchApiConfig, EmbeddingConfig, PgConfig } from "@/stores/wiki-store"
+import type { LlmConfig, SearchApiConfig, EmbeddingConfig, PgConfig, BrandAuth } from "@/stores/wiki-store"
 import type { AppTheme } from "@/types/theme"
 
 const STORE_NAME = "app-state.json"
@@ -85,6 +85,18 @@ export async function savePgConfig(config: PgConfig): Promise<void> {
 export async function loadPgConfig(): Promise<PgConfig | null> {
   const store = await getStore()
   return (await store.get<PgConfig>(PG_CONFIG_KEY)) ?? null
+}
+
+const BRAND_AUTH_KEY = "brandAuth"
+
+export async function saveBrandAuth(auth: BrandAuth): Promise<void> {
+  const store = await getStore()
+  await store.set(BRAND_AUTH_KEY, auth)
+}
+
+export async function loadBrandAuth(): Promise<BrandAuth | null> {
+  const store = await getStore()
+  return (await store.get<BrandAuth>(BRAND_AUTH_KEY)) ?? null
 }
 
 export async function removeFromRecentProjects(

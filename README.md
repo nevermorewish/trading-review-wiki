@@ -1,4 +1,4 @@
-# Trading Review Wiki Codex CLI
+# 寰星Agent Codex CLI
 
 > 面向交易复盘知识库的 Codex CLI 工具集：把 raw 资料、正式 wiki、图谱、长期记忆、结构化事实和行情 SQL 组织成一个可检索、可验证、可迭代的交易研究系统。
 
@@ -17,7 +17,7 @@
 
 ## Desktop App Builds
 
-If you want the earlier Tauri desktop app instead of the Codex CLI toolchain, use the historical desktop builds from [GitHub Releases](https://github.com/ymj8903668-droid/trading-review-wiki/releases). The desktop app keeps the familiar three-pane wiki UI, quick review workflow, settlement import, graph view, settings panel, and Save to Wiki flow.
+If you want the earlier Tauri desktop app instead of the Codex CLI toolchain, use the historical desktop builds from [GitHub Releases](https://github.com/your-org/huanxing-agent/releases). The desktop app keeps the familiar three-pane wiki UI, quick review workflow, settlement import, graph view, settings panel, and Save to Wiki flow.
 
 The current `main` branch is optimized for CLI automation and agent-assisted wiki maintenance. Desktop users can keep using the published release artifacts while CLI users work from source.
 
@@ -45,7 +45,7 @@ The current `main` branch is optimized for CLI automation and agent-assisted wik
 | 路径 | 角色 | 写入规则 |
 |---|---|---|
 | 本仓库 | CLI/桌面源码仓库 | 开发和提交工具代码 |
-| 本地 Trading Review Wiki 工作区 | live 知识库 | `raw/`、`wiki/`、`data/brain/`、`data/facts/` 数据在这里 |
+| 本地 寰星Agent 工作区 | live 知识库 | `raw/`、`wiki/`、`data/brain/`、`data/facts/` 数据在这里 |
 | 本地 Codex skills 目录 | Codex skills 入口 | 自动化工作流的可复用包装 |
 | 本地自动化目录 | 自动化环境 | 定时任务、DB config、局部 `CODEX_HOME` |
 
@@ -60,7 +60,7 @@ The current `main` branch is optimized for CLI automation and agent-assisted wik
 ## 快速开始
 
 ```sh
-cd /path/to/trading-review-wiki
+cd /path/to/寰星Agent
 npm install
 npm test -- --run
 ```
@@ -68,7 +68,7 @@ npm test -- --run
 示例 project 路径：
 
 ```sh
-/path/to/your/trading-review-wiki-project
+/path/to/your/寰星Agent-project
 ```
 
 默认使用本地 Codex 登录态：
@@ -86,7 +86,7 @@ npm test -- --run
 ```sh
 npm run codex:ingest -- search \
   --query "AI服务器电源 最近一周" \
-  --project /path/to/your/trading-review-wiki-project \
+  --project /path/to/your/寰星Agent-project \
   --preset auto
 ```
 
@@ -95,7 +95,7 @@ npm run codex:ingest -- search \
 ```sh
 npm run codex:ingest -- smart-search \
   --query "AI服务器PCB 上游材料扩散到哪些分支？哪些证据还只是叙事？" \
-  --project /path/to/your/trading-review-wiki-project \
+  --project /path/to/your/寰星Agent-project \
   --provider codex
 ```
 
@@ -104,7 +104,7 @@ npm run codex:ingest -- smart-search \
 ```sh
 npm run codex:ingest -- ask \
   --query "最近一周机器人产业链有哪些变化？区分订单兑现和情绪催化" \
-  --project /path/to/your/trading-review-wiki-project \
+  --project /path/to/your/寰星Agent-project \
   --provider codex \
   --show-context \
   --show-sources
@@ -146,7 +146,7 @@ npm run codex:ingest -- ask \
 ```sh
 npm run codex:ingest -- ask \
   --query "机器人产业链里哪些订单或验证信号后来被反驳过？" \
-  --project /path/to/your/trading-review-wiki-project \
+  --project /path/to/your/寰星Agent-project \
   --provider codex \
   --sources wiki,raw,graph,facts \
   --include-invalidated \
@@ -172,7 +172,7 @@ npm run codex:ingest -- ask \
 
 ```sh
 npm run codex:ingest -- temporal-facts audit \
-  --project /path/to/your/trading-review-wiki-project \
+  --project /path/to/your/寰星Agent-project \
   --limit 200
 ```
 
@@ -189,11 +189,11 @@ npm run codex:ingest -- temporal-facts audit \
 ```sh
 npm run codex:ingest -- prepare \
   --source /path/to/source.md \
-  --project /path/to/your/trading-review-wiki-project
+  --project /path/to/your/寰星Agent-project
 
 npm run codex:ingest -- api-run \
   --source /path/to/source.md \
-  --project /path/to/your/trading-review-wiki-project \
+  --project /path/to/your/寰星Agent-project \
   --provider codex \
   --model gpt-5.5
 
@@ -203,7 +203,7 @@ npm run codex:ingest -- finalize \
 
 npm run codex:ingest -- apply \
   --manifest /path/to/changes.json \
-  --project /path/to/your/trading-review-wiki-project \
+  --project /path/to/your/寰星Agent-project \
   --write
 ```
 
@@ -223,7 +223,7 @@ npm run codex:ingest -- apply \
 ```sh
 npm run codex:ingest -- daily-loop \
   --mode premarket \
-  --project /path/to/your/trading-review-wiki-project \
+  --project /path/to/your/寰星Agent-project \
   --provider codex \
   --model gpt-5.5 \
   --reasoning-effort xhigh \
@@ -239,7 +239,7 @@ npm run codex:ingest -- daily-loop \
 npm run codex:ingest -- daily-loop \
   --mode postclose \
   --validate-pending-only \
-  --project /path/to/your/trading-review-wiki-project \
+  --project /path/to/your/寰星Agent-project \
   --write
 ```
 
@@ -262,7 +262,7 @@ npm run codex:ingest -- daily-loop \
 ```sh
 npm run codex:ingest -- company-research \
   --stock "绿的谐波" \
-  --project /path/to/your/trading-review-wiki-project \
+  --project /path/to/your/寰星Agent-project \
   --provider codex \
   --deep
 ```
@@ -288,15 +288,15 @@ npm run codex:ingest -- company-research \
 npm run codex:ingest -- brain remember \
   --type correction \
   --text "高开接盘必须看承接，不允许把热度当作买点" \
-  --project /path/to/your/trading-review-wiki-project
+  --project /path/to/your/寰星Agent-project
 
 npm run codex:ingest -- brain status \
-  --project /path/to/your/trading-review-wiki-project
+  --project /path/to/your/寰星Agent-project
 
 npm run codex:ingest -- brain resolve \
   --id <brain-id> \
   --result success \
-  --project /path/to/your/trading-review-wiki-project
+  --project /path/to/your/寰星Agent-project
 ```
 
 ### 行情验证
@@ -306,7 +306,7 @@ npm run codex:ingest -- market-validate \
   --prediction "绿的谐波机器人链条继续走强" \
   --stock "688017" \
   --window 20d \
-  --project /path/to/your/trading-review-wiki-project
+  --project /path/to/your/寰星Agent-project
 ```
 
 ### 检索质量评估
@@ -315,20 +315,20 @@ npm run codex:ingest -- market-validate \
 npm run codex:ingest -- ask eval \
   --query "物理AI 绿的谐波 谐波减速器 机器人" \
   --expect-paths "wiki/股票/绿的谐波.md,wiki/概念/物理AI与具身智能.md" \
-  --project /path/to/your/trading-review-wiki-project
+  --project /path/to/your/寰星Agent-project
 ```
 
 ### Wiki hygiene
 
 ```sh
 npm run codex:ingest -- hygiene audit \
-  --project /path/to/your/trading-review-wiki-project
+  --project /path/to/your/寰星Agent-project
 
 npm run codex:ingest -- hygiene plan \
-  --project /path/to/your/trading-review-wiki-project
+  --project /path/to/your/寰星Agent-project
 
 npm run codex:ingest -- hygiene apply \
-  --project /path/to/your/trading-review-wiki-project \
+  --project /path/to/your/寰星Agent-project \
   --write
 ```
 
