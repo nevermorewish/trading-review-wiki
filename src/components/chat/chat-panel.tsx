@@ -14,6 +14,10 @@ import { useReviewStore } from "@/stores/review-store"
 import type { FileNode } from "@/types/wiki"
 import { normalizePath, getFileName, getRelativePath } from "@/lib/path-utils"
 import { detectLanguage } from "@/lib/detect-language"
+import { AccountLoginDialog } from "@/components/account/account-login-dialog"
+import { brandChatEndpoint, getBrand } from "@/lib/brands"
+import { saveBrandAuth, saveLlmConfig } from "@/lib/project-store"
+import { ModelPickerDialog } from "./model-picker-dialog"
 
 // lastQueryPages is now stored in chat-store to avoid module-level mutable state issues
 
@@ -119,6 +123,8 @@ function ConversationSidebar() {
 
 export function ChatPanel() {
   useSourceFiles() // Keep source file cache warm
+  const [accountDialogOpen, setAccountDialogOpen] = useState(false)
+  const [modelPickerOpen, setModelPickerOpen] = useState(false)
   const activeConversationId = useChatStore((s) => s.activeConversationId)
   const isStreaming = useChatStore((s) => s.isStreaming)
   const streamingContent = useChatStore((s) => s.streamingContent)
@@ -139,6 +145,9 @@ export function ChatPanel() {
 
   const project = useWikiStore((s) => s.project)
   const llmConfig = useWikiStore((s) => s.llmConfig)
+  const brandAuth = useWikiStore((s) => s.brandAuth)
+  const setBrandAuth = useWikiStore((s) => s.setBrandAuth)
+  const setLlmConfig = useWikiStore((s) => s.setLlmConfig)
   const setFileTree = useWikiStore((s) => s.setFileTree)
 
   const abortRef = useRef<AbortController | null>(null)
@@ -437,6 +446,24 @@ export function ChatPanel() {
     }
   }, [project, llmConfig, setFileTree])
 
+  const handleSelectAccountModel = useCallback(
+    async (model: string) => {
+      if (!brandAuth.loggedIn || !brandAuth.accessToken || !model) return
+      const auth = { ...brandAuth, defaultModel: model }
+      const cfg = {
+        ...useWikiStore.getState().llmConfig,
+        provider: "frogclaw" as const,
+        apiKey: auth.accessToken,
+        model,
+        customEndpoint: auth.baseUrl ? brandChatEndpoint(auth.baseUrl) : "",
+      }
+      setBrandAuth(auth)
+      setLlmConfig(cfg)
+      await Promise.all([saveBrandAuth(auth), saveLlmConfig(cfg)])
+    },
+    [brandAuth, setBrandAuth, setLlmConfig],
+  )
+
   const hasAssistantMessages = activeMessages.some((m) => m.role === "assistant")
   const showWriteButton = mode === "ingest" && !isStreaming && hasAssistantMessages
 
@@ -498,12 +525,32 @@ export function ChatPanel() {
           onSend={handleSend}
           onStop={handleStop}
           isStreaming={isStreaming}
+          models={brandAuth.loggedIn ? brandAuth.models : []}
+          selectedModel={brandAuth.loggedIn ? brandAuth.defaultModel : ""}
+          brandName={brandAuth.loggedIn ? getBrand(brandAuth.brandId).name : undefined}
+          onOpenModelPicker={brandAuth.loggedIn ? () => setModelPickerOpen(true) : undefined}
           placeholder={
             mode === "ingest"
               ? "Discuss the source or ask follow-up questions..."
               : "Type a message..."
           }
         />
+        <AccountLoginDialog
+          open={accountDialogOpen}
+          onOpenChange={setAccountDialogOpen}
+          configuredModels={brandAuth.models}
+        />
+        {brandAuth.loggedIn && (
+          <ModelPickerDialog
+            open={modelPickerOpen}
+            onOpenChange={setModelPickerOpen}
+            brandId={brandAuth.brandId}
+            models={brandAuth.models}
+            selectedModel={brandAuth.defaultModel}
+            onSelectModel={handleSelectAccountModel}
+            onReconfigureModels={() => setAccountDialogOpen(true)}
+          />
+        )}
       </div>
     </div>
   )

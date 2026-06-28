@@ -24,6 +24,7 @@ interface BrandAuth {
   username: string
   userId: number | null
   accessToken: string
+  availableModels?: string[]
   models: string[]
   defaultModel: string
   loggedIn: boolean
@@ -125,11 +126,12 @@ export const useWikiStore = create<WikiState>((set) => ({
   },
 
   brandAuth: {
-    brandId: "frogclaw",
+    brandId: "huanxinghermes",
     baseUrl: "",
     username: "",
     userId: null,
     accessToken: "",
+    availableModels: [],
     models: [],
     defaultModel: "",
     loggedIn: false,

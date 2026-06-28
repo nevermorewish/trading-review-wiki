@@ -1,0 +1,20 @@
+{
+  "id": "fengchihermes",
+  "name": "风驰云",
+  "defaultBaseUrl": "https://ai.fengchiyun.com",
+  "group": "default",
+  "order": 2,
+  "registerUrl": "https://www.fengchicloud.com/console/index.html#/login?redirect=%2F&type=1",
+  "rechargeUrl": "https://ai.fengchiyun.com/wallet",
+  "accountDefaultModels": [
+    "claude-opus-4-8",
+    "deepseek-v4-flash",
+    "deepseek-v4-pro",
+    "gpt-5.5",
+    "kimi-k2.6",
+    "minimax-m3",
+    "mimo-v2.5-pro",
+    "glm-5.1"
+  ],
+  "accountModelDescriptions": {}
+}

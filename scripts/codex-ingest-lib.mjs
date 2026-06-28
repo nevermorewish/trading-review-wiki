@@ -5830,7 +5830,7 @@ async function httpsGetText(url, options = {}) {
         headers: {
           accept: "application/json,text/plain,*/*",
           referer: "https://quote.eastmoney.com/",
-          "user-agent": "Mozilla/5.0 TradingReviewWiki/1.0",
+          "user-agent": "Mozilla/5.0 HuanxingAgent/1.0",
         },
       },
       (res) => {
@@ -5867,7 +5867,7 @@ async function curlGetText(url, options = {}) {
       "-H",
       "Referer: https://quote.eastmoney.com/",
       "-H",
-      "User-Agent: Mozilla/5.0 TradingReviewWiki/1.0",
+      "User-Agent: Mozilla/5.0 HuanxingAgent/1.0",
       url,
     ],
     { maxBuffer: 1024 * 1024 },
@@ -5889,7 +5889,7 @@ async function fetchJsonWithHttpsFallback(url, options = {}) {
       headers: {
         accept: "application/json,text/plain,*/*",
         referer: "https://quote.eastmoney.com/",
-        "user-agent": "Mozilla/5.0 TradingReviewWiki/1.0",
+        "user-agent": "Mozilla/5.0 HuanxingAgent/1.0",
       },
     })
     return response.json()
@@ -7827,7 +7827,7 @@ function normalizeSmartSearchPlan(rawPlan, fallbackQuery, fallbackSources) {
 
 function buildSmartSearchPlanPrompt({ query, presetName, preset }) {
   return [
-    "# Trading Review Wiki Smart Retrieval Plan",
+    "# 寰星Agent Smart Retrieval Plan",
     "",
     `question: ${query}`,
     `default_preset: ${presetName}`,
@@ -7989,7 +7989,7 @@ function mergeAskSearchPayloads({ query, projectPath, presetName, routeReason, p
 
 function buildSmartSearchRerankPrompt(payload) {
   return [
-    "# Trading Review Wiki Evidence Rerank",
+    "# 寰星Agent Evidence Rerank",
     "",
     `question: ${payload.query}`,
     "",
@@ -8759,7 +8759,7 @@ async function defaultSseAnnouncementClient({ company, to, timeoutMs, options = 
       fetchOptions: {
         headers: {
           Referer: "https://www.sse.com.cn/",
-          "User-Agent": "Mozilla/5.0 trading-review-wiki-company-research",
+          "User-Agent": "Mozilla/5.0 huanxing-agent-company-research",
         },
       },
     })
@@ -8808,7 +8808,7 @@ async function defaultCninfoClient({ company, from, to, timeoutMs, options = {} 
       fetchOptions: {
         headers: {
           Referer: "https://www.cninfo.com.cn/new/index",
-          "User-Agent": "Mozilla/5.0 trading-review-wiki-company-research",
+          "User-Agent": "Mozilla/5.0 huanxing-agent-company-research",
         },
       },
     })
@@ -9094,7 +9094,7 @@ async function downloadCninfoArtifacts({ projectPath, outputDir, announcements, 
             fetchOptions: {
               headers: {
                 Referer: announcement.source === "sse_public_web" ? "https://www.sse.com.cn/" : "https://www.cninfo.com.cn/new/index",
-                "User-Agent": "Mozilla/5.0 trading-review-wiki-company-research",
+                "User-Agent": "Mozilla/5.0 huanxing-agent-company-research",
               },
             },
           })
@@ -9458,7 +9458,7 @@ function buildEvidenceLedger({ company, cninfo, downloads, tushare, tavily, wiki
     })
   }
   rows.push({
-    dataItem: "Trading Review Wiki retrieval",
+    dataItem: "寰星Agent retrieval",
     source: "wiki",
     tool: "ask_retrieval_context",
     status: wikiContext?.retrievalWarnings?.length ? "partial" : "success",
@@ -13595,7 +13595,7 @@ function buildResponsesBody({ model, prompt, instructions, reasoningEffort = "me
     instructions:
       instructions ??
       [
-        "You are Codex implementing an application-grade text ingest for a trading review wiki.",
+        "You are Codex implementing an application-grade text ingest for a 寰星Agent.",
         "Follow the stage-specific output format exactly.",
       ].join("\n"),
     input: [

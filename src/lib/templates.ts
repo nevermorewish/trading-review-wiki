@@ -422,7 +422,7 @@ sources: 0
 
 ## Obsidian 使用建议
 
-- 用 Obsidian 打开 \`trading-review-wiki/wiki/\` 目录作为 Vault。
+- 用 Obsidian 打开 \`寰星Agent/wiki/\` 目录作为 Vault。
 - 开启 Graph View，定期查看知识网络的生长情况。
 - 使用 Dataview 插件查询带 frontmatter 的页面（如筛选 \`type: 错误\` 的页面）。
 - 用 Tag 补充分类：\`#龙头 #低吸 #情绪冰点 #纪律 #心态\`
@@ -1687,7 +1687,7 @@ sources: 0
 
 ## Obsidian 使用建议
 
-- 用 Obsidian 打开 \`trading-review-wiki/wiki/\` 目录作为 Vault。
+- 用 Obsidian 打开 \`寰星Agent/wiki/\` 目录作为 Vault。
 - 开启 Graph View，定期查看知识网络的生长情况。
 - 使用 Dataview 插件查询带 frontmatter 的页面（如筛选 \`type: 错误\` 的页面）。
 - 用 Tag 补充分类：\`#龙头 #低吸 #情绪冰点 #纪律 #心态\`

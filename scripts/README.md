@@ -1,4 +1,4 @@
-# Trading Review Wiki 文件整理脚本
+# 寰星Agent 文件整理脚本
 
 > 一键将散落在 wiki 根目录的 `.md` 文件，按 frontmatter `type` 自动归类到对应分类目录。
 
@@ -36,11 +36,11 @@ v0.5.8 及之前版本存在目录路由问题，LLM 生成的文件可能：
 
 ```bash
 # 方式一：直接下载 raw 文件
-curl -O https://raw.githubusercontent.com/ymj8903668-droid/trading-review-wiki/main/scripts/reorganize-wiki.cjs
+curl -O https://raw.githubusercontent.com/your-org/huanxing-agent/main/scripts/reorganize-wiki.cjs
 
 # 方式二：克隆仓库后使用
-git clone https://github.com/ymj8903668-droid/trading-review-wiki.git
-cd trading-review-wiki/scripts
+git clone https://github.com/your-org/huanxing-agent.git
+cd 寰星Agent/scripts
 ```
 
 ### 2. 预览（强烈建议先预览）
@@ -124,14 +124,14 @@ node reorganize-wiki.cjs --help
 - **目标已存在**：如果目标目录已有同名文件，脚本会自动跳过（不会覆盖）
 - **无 type 的文件**：如果文件没有 frontmatter `type`，脚本会提示跳过，需要你手动处理
 - **系统文件保护**：`index.md`、`log.md`、`overview.md`、`schema.md`、`purpose.md` 保留在根目录
-- **关闭应用后再运行**：确保 Trading Review Wiki 应用已关闭，避免文件冲突
+- **关闭应用后再运行**：确保 寰星Agent 应用已关闭，避免文件冲突
 
 ---
 
 ## 常见问题
 
 **Q: 脚本运行后文件树没有变化？**
-> 关闭并重新打开 Trading Review Wiki 应用即可刷新文件树。
+> 关闭并重新打开 寰星Agent 应用即可刷新文件树。
 
 **Q: 有些文件提示"未知 type"怎么办？**
 > 使用 `--map` 参数临时添加映射：

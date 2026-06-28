@@ -30,17 +30,10 @@ import {
   FolderTree,
   FileScan,
   Trash2,
-  LogIn,
-  LogOut,
-  UserCircle2,
-  ExternalLink,
 } from "lucide-react"
-import { invoke } from "@tauri-apps/api/core"
 import { previewProviderUrl, testLlmConnection, type LlmTestResult } from "@/lib/llm-test"
-import { BRANDS, getBrand, brandChatEndpoint } from "@/lib/brands"
-import { frogclawLogin } from "@/commands/frogclaw"
-import { saveBrandAuth } from "@/lib/project-store"
-import type { BrandAuth } from "@/stores/wiki-store"
+import { brandChatEndpoint, getBrand } from "@/lib/brands"
+import { AccountLoginDialog } from "@/components/account/account-login-dialog"
 
 const PROVIDERS = [
   { value: "frogclaw" as const, label: "FrogClaw (账号登录)", models: [] },
@@ -310,7 +303,7 @@ export function SettingsView() {
               </div>
             </div>
 
-            {provider === "frogclaw" && <BrandLoginSection model={model} setModel={setModel} />}
+            {provider === "frogclaw" && <BrandLoginSection />}
 
             {provider !== "frogclaw" && (provider === "custom" ||
               provider === "minimax" ||
@@ -767,275 +760,40 @@ export function SettingsView() {
   )
 }
 
-/** Open a URL in the system browser via the Tauri opener plugin (falls back to window.open). */
-async function openExternal(url: string) {
-  try {
-    await invoke("plugin:opener|open_url", { url })
-  } catch {
-    window.open(url, "_blank", "noopener,noreferrer")
-  }
-}
-
-/**
- * Account-based login + model picker for "brand" relays (frogclaw / sub2api).
- * Login runs through the Rust frogclaw_login command; on success the minted
- * relay token + model list are stored in `brandAuth` and persisted. The chosen
- * default model flows into the saved LlmConfig when the user clicks Save.
- */
-function BrandLoginSection({
-  model,
-  setModel,
-}: {
-  model: string
-  setModel: (m: string) => void
-}) {
+function BrandLoginSection() {
+  const [open, setOpen] = useState(false)
   const brandAuth = useWikiStore((s) => s.brandAuth)
-  const setBrandAuth = useWikiStore((s) => s.setBrandAuth)
-
-  const [brandId, setBrandId] = useState(brandAuth.brandId || "frogclaw")
-  const [baseUrl, setBaseUrl] = useState(
-    brandAuth.baseUrl || getBrand(brandAuth.brandId || "frogclaw").defaultBaseUrl,
-  )
-  const [username, setUsername] = useState(brandAuth.username)
-  const [password, setPassword] = useState("")
-  const [showPassword, setShowPassword] = useState(false)
-  const [loggingIn, setLoggingIn] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
-  // Keep the selected default model in sync with the form's model field.
-  useEffect(() => {
-    if (brandAuth.loggedIn && brandAuth.defaultModel && !model) {
-      setModel(brandAuth.defaultModel)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [brandAuth.loggedIn])
-
-  async function handleLogin() {
-    if (!baseUrl.trim()) {
-      setError("请填写服务器地址")
-      return
-    }
-    if (!username.trim() || !password) {
-      setError("请填写账号和密码")
-      return
-    }
-    setError(null)
-    setLoggingIn(true)
-    try {
-      const brand = getBrand(brandId)
-      const result = await frogclawLogin(baseUrl.trim(), username.trim(), password, brand.group)
-      const defaultModel = result.models.includes(brandAuth.defaultModel)
-        ? brandAuth.defaultModel
-        : result.models[0] ?? ""
-      const auth: BrandAuth = {
-        brandId,
-        baseUrl: baseUrl.trim().replace(/\/$/, ""),
-        username: result.username,
-        userId: result.user_id,
-        accessToken: result.access_token,
-        models: result.models,
-        defaultModel,
-        loggedIn: true,
-      }
-      setBrandAuth(auth)
-      await saveBrandAuth(auth)
-      setModel(defaultModel)
-      setPassword("")
-    } catch (err) {
-      setError(typeof err === "string" ? err : err instanceof Error ? err.message : String(err))
-    } finally {
-      setLoggingIn(false)
-    }
-  }
-
-  async function handleLogout() {
-    const auth: BrandAuth = {
-      brandId,
-      baseUrl: baseUrl.trim().replace(/\/$/, ""),
-      username: "",
-      userId: null,
-      accessToken: "",
-      models: [],
-      defaultModel: "",
-      loggedIn: false,
-    }
-    setBrandAuth(auth)
-    await saveBrandAuth(auth)
-    setModel("")
-  }
-
-  async function handlePickModel(m: string) {
-    setModel(m)
-    const auth: BrandAuth = { ...brandAuth, defaultModel: m }
-    setBrandAuth(auth)
-    await saveBrandAuth(auth)
-  }
+  const brand = getBrand(brandAuth.brandId)
 
   return (
     <div className="space-y-3 rounded-md border bg-muted/20 p-3">
-      {/* Brand selector */}
-      <div className="space-y-2">
-        <Label>品牌</Label>
-        <div className="flex flex-wrap gap-2">
-          {BRANDS.map((b) => (
-            <button
-              key={b.id}
-              disabled={brandAuth.loggedIn}
-              onClick={() => {
-                setBrandId(b.id)
-                if (!baseUrl.trim() || baseUrl === getBrand(brandId).defaultBaseUrl) {
-                  setBaseUrl(b.defaultBaseUrl)
-                }
-              }}
-              className={`rounded-md border px-3 py-1.5 text-sm transition-colors disabled:opacity-50 ${
-                brandId === b.id
-                  ? "border-primary bg-primary text-primary-foreground"
-                  : "border-border hover:bg-accent"
-              }`}
-            >
-              {b.name}
-            </button>
-          ))}
-        </div>
-      </div>
-
       {brandAuth.loggedIn ? (
-        <>
-          {/* Logged-in account badge */}
-          <div className="flex items-center justify-between rounded-md border bg-background px-3 py-2">
-            <div className="flex items-center gap-2">
-              <UserCircle2 className="size-5 text-primary" />
-              <div className="flex flex-col">
-                <span className="text-sm font-medium">{brandAuth.username}</span>
-                <span className="text-xs text-muted-foreground">
-                  {getBrand(brandAuth.brandId).name} · {brandAuth.baseUrl}
-                </span>
-              </div>
+        <div className="space-y-3">
+          <div className="rounded-md border bg-background px-3 py-2">
+            <div className="text-sm font-medium">{brandAuth.username}</div>
+            <div className="mt-0.5 truncate text-xs text-muted-foreground">
+              {brand.name} · {brandAuth.baseUrl}
             </div>
-            <div className="flex items-center gap-2">
-              {getBrand(brandAuth.brandId).rechargeUrl && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => openExternal(getBrand(brandAuth.brandId).rechargeUrl)}
-                >
-                  <ExternalLink className="mr-1.5 size-4" />
-                  充值
-                </Button>
-              )}
-              <Button variant="outline" size="sm" onClick={handleLogout}>
-                <LogOut className="mr-1.5 size-4" />
-                退出登录
-              </Button>
+            <div className="mt-1 truncate text-xs text-muted-foreground">
+              默认模型：{brandAuth.defaultModel || "未选择"}
             </div>
           </div>
-
-          {/* Model picker (default model = selected) */}
-          <div className="space-y-2">
-            <Label>选择模型（默认）</Label>
-            {brandAuth.models.length > 0 ? (
-              <div className="flex flex-wrap gap-2">
-                {brandAuth.models.map((m) => (
-                  <button
-                    key={m}
-                    onClick={() => handlePickModel(m)}
-                    title={getBrand(brandAuth.brandId).accountModelDescriptions[m] ?? m}
-                    className={`rounded-md border px-3 py-1.5 text-sm transition-colors ${
-                      model === m
-                        ? "border-primary bg-primary text-primary-foreground"
-                        : "border-border hover:bg-accent"
-                    }`}
-                  >
-                    {m}
-                  </button>
-                ))}
-              </div>
-            ) : (
-              <p className="text-xs text-muted-foreground">该账号暂无可用模型。</p>
-            )}
-            <Input
-              value={model}
-              onChange={(e) => handlePickModel(e.target.value)}
-              placeholder="也可手动输入模型名"
-            />
-            <p className="text-xs text-muted-foreground">
-              点击模型即设为默认。保存后用于所有 AI 调用。
-            </p>
-          </div>
-        </>
-      ) : (
-        <>
-          {/* Login form */}
-          <div className="space-y-2">
-            <Label>服务器地址</Label>
-            <Input
-              value={baseUrl}
-              onChange={(e) => setBaseUrl(e.target.value)}
-              placeholder="https://your-frogclaw-domain.com"
-            />
-            <p className="text-xs text-muted-foreground">
-              中转站根地址，无需 /v1 后缀（自动拼接）。
-            </p>
-            {getBrand(brandId).registerUrl && (
-              <button
-                type="button"
-                onClick={() => openExternal(getBrand(brandId).registerUrl)}
-                className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
-              >
-                <ExternalLink className="size-3" />
-                还没有账号？注册
-              </button>
-            )}
-          </div>
-          <div className="space-y-2">
-            <Label>账号</Label>
-            <Input
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              placeholder="用户名"
-              autoComplete="username"
-            />
-          </div>
-          <div className="space-y-2">
-            <Label>密码</Label>
-            <div className="relative">
-              <Input
-                type={showPassword ? "text" : "password"}
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="pr-9 font-mono"
-                placeholder="密码"
-                autoComplete="current-password"
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") handleLogin()
-                }}
-              />
-              <button
-                type="button"
-                onClick={() => setShowPassword((v) => !v)}
-                className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                aria-label={showPassword ? "隐藏密码" : "显示密码"}
-                tabIndex={-1}
-              >
-                {showPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
-              </button>
-            </div>
-          </div>
-          <Button onClick={handleLogin} disabled={loggingIn} className="w-full">
-            {loggingIn ? (
-              <Loader2 className="mr-2 size-4 animate-spin" />
-            ) : (
-              <LogIn className="mr-2 size-4" />
-            )}
-            {loggingIn ? "登录中…" : "登录"}
+          <Button type="button" variant="outline" onClick={() => setOpen(true)} className="w-full">
+            重新选择账号模型
           </Button>
-          {error && <p className="text-xs text-red-600 break-all">{error}</p>}
-        </>
+        </div>
+      ) : (
+        <Button type="button" onClick={() => setOpen(true)} className="w-full">
+          登录账号并选择模型
+        </Button>
       )}
+      <p className="text-xs text-muted-foreground">
+        账号登录和模型选择与侧栏、对话窗口共用同一套 Hermes 流程。保存模型后会自动写入当前 LLM 配置。
+      </p>
+      <AccountLoginDialog open={open} onOpenChange={setOpen} configuredModels={brandAuth.models} />
     </div>
   )
 }
-
 // Context size presets matching common model context windows
 const CONTEXT_PRESETS = [
   { value: 4096, label: "4K" },

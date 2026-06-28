@@ -1,0 +1,20 @@
+{
+  "id": "frogclawhermes",
+  "name": "FrogClaw助手",
+  "defaultBaseUrl": "https://frogclaw.com",
+  "group": "default",
+  "order": 1,
+  "registerUrl": "https://frogclaw.com/sign-up",
+  "rechargeUrl": "https://frogclaw.com/wallet",
+  "accountDefaultModels": [
+    "claude-opus-4-8",
+    "deepseek-v4-flash",
+    "deepseek-v4-pro",
+    "gpt-5.5",
+    "kimi-k2.6",
+    "minimax-m3",
+    "mimo-v2.5-pro",
+    "glm-5.1"
+  ],
+  "accountModelDescriptions": {}
+}

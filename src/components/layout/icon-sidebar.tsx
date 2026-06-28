@@ -249,10 +249,8 @@ export function IconSidebar({ onSwitchProject }: IconSidebarProps) {
             )}
           </button>
         </div>
-        {/* Bottom: account login + daemon status + settings + switch project */}
+        {/* Bottom: daemon status + settings + switch project + account login */}
         <div className="flex flex-col gap-0.5 px-1.5 pb-1">
-          {/* Account login (mirrors Hermes bottom-left login area) */}
-          <AccountLoginButton />
           {/* Daemon status indicator */}
           <div className="flex h-7 w-full items-center gap-2.5 px-3 text-xs text-muted-foreground">
             <span
@@ -284,6 +282,8 @@ export function IconSidebar({ onSwitchProject }: IconSidebarProps) {
             <ArrowLeftRight className="h-4 w-4 shrink-0" />
             <span className="flex-1 truncate text-left">{t("nav.switchProject")}</span>
           </button>
+          {/* Account login (mirrors Hermes bottom-left login area) */}
+          <AccountLoginButton />
         </div>
       </div>
 

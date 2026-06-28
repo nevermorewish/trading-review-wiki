@@ -22,27 +22,75 @@ export interface Brand {
 
 export const BRANDS: readonly Brand[] = [
   {
-    "id": "frogclaw",
-    "name": "FrogClaw",
-    "defaultBaseUrl": "",
+    "id": "huanxinghermes",
+    "name": "寰星Agent",
+    "defaultBaseUrl": "https://api.huanxing.ai",
     "group": "default",
     "order": 0,
-    "registerUrl": "",
-    "rechargeUrl": "",
-    "accountDefaultModels": [],
+    "registerUrl": "https://api.huanxing.ai/sign-up",
+    "rechargeUrl": "https://api.huanxing.ai/wallet",
+    "accountDefaultModels": [
+      "deepseek-v4-flash",
+      "deepseek-v4-pro",
+      "gpt-5.5",
+      "kimi-k2.6",
+      "minimax-m3",
+      "mimo-v2.5-pro",
+      "glm-5.1"
+    ],
+    "accountModelDescriptions": {
+      "deepseek-v4-flash": "响应快、成本低，适合日常问答、轻量代码修改和批量文本处理。",
+      "deepseek-v4-pro": "更强的推理和代码能力，适合复杂开发、长链路分析和高质量写作。",
+      "gpt-5.5": "通用能力强，适合综合任务、工具调用、多轮规划和复杂问题拆解。",
+      "kimi-k2.6": "长文本阅读和中文理解表现稳定，适合资料分析、总结和知识密集型任务。",
+      "minimax-m3": "中文表达自然，适合内容创作、客服对话和多轮中文沟通。",
+      "mimo-v2.5-pro": "偏工程和数学推理，适合代码审查、问题定位和结构化分析。",
+      "glm-5.1": "中文场景均衡，适合办公写作、问答和常规 Agent 任务。",
+      "claude-opus-4-8": "复杂推理、代码架构和长上下文任务表现突出，只支持 Claude Code 中使用。",
+      "claude-opus-4-7": "复杂推理、代码架构和长上下文任务表现突出，只支持 Claude Code 中使用。",
+      "claude-opus-4-6": "复杂推理、代码架构和长上下文任务表现突出，只支持 Claude Code 中使用。"
+    }
+  },
+  {
+    "id": "frogclawhermes",
+    "name": "FrogClaw助手",
+    "defaultBaseUrl": "https://frogclaw.com",
+    "group": "default",
+    "order": 1,
+    "registerUrl": "https://frogclaw.com/sign-up",
+    "rechargeUrl": "https://frogclaw.com/wallet",
+    "accountDefaultModels": [
+      "claude-opus-4-8",
+      "deepseek-v4-flash",
+      "deepseek-v4-pro",
+      "gpt-5.5",
+      "kimi-k2.6",
+      "minimax-m3",
+      "mimo-v2.5-pro",
+      "glm-5.1"
+    ],
     "accountModelDescriptions": {}
   },
   {
-    "id": "sub2api",
-    "name": "Sub2API",
-    "defaultBaseUrl": "",
+    "id": "fengchihermes",
+    "name": "风驰云",
+    "defaultBaseUrl": "https://ai.fengchiyun.com",
     "group": "default",
-    "order": 1,
-    "registerUrl": "",
-    "rechargeUrl": "",
-    "accountDefaultModels": [],
+    "order": 2,
+    "registerUrl": "https://www.fengchicloud.com/console/index.html#/login?redirect=%2F&type=1",
+    "rechargeUrl": "https://ai.fengchiyun.com/wallet",
+    "accountDefaultModels": [
+      "claude-opus-4-8",
+      "deepseek-v4-flash",
+      "deepseek-v4-pro",
+      "gpt-5.5",
+      "kimi-k2.6",
+      "minimax-m3",
+      "mimo-v2.5-pro",
+      "glm-5.1"
+    ],
     "accountModelDescriptions": {}
   },
 ] as const
 
-export const DEFAULT_BRAND_ID = "frogclaw"
+export const DEFAULT_BRAND_ID = "huanxinghermes"

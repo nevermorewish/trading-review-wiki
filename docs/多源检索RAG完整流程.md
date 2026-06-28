@@ -2,7 +2,7 @@
 
 ## 1. 总览
 
-当前 Trading Review Wiki 的检索主链路拆成三档：
+当前 寰星Agent 的检索主链路拆成三档：
 
 ```text
 search
