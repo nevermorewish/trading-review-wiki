@@ -1,5 +1,6 @@
-import { useRef, useState, useCallback, useMemo, useEffect } from "react"
-import { Bot, ChevronDown, Send, Square, Paperclip, X } from "lucide-react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import type { ChangeEvent, ClipboardEvent, DragEvent, KeyboardEvent } from "react"
+import { Bot, ChevronDown, Paperclip, Send, Square, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 
 interface ChatInputProps {
@@ -29,11 +30,11 @@ export function ChatInput({
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  const handleInput = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
+  const handleInput = useCallback((e: ChangeEvent<HTMLTextAreaElement>) => {
     setValue(e.target.value)
     const ta = e.target
     ta.style.height = "auto"
-    ta.style.height = `${Math.min(ta.scrollHeight, 120)}px`
+    ta.style.height = `${Math.min(Math.max(ta.scrollHeight, 112), 220)}px`
   }, [])
 
   const handleSend = useCallback(() => {
@@ -43,12 +44,12 @@ export function ChatInput({
     setValue("")
     setImages([])
     if (textareaRef.current) {
-      textareaRef.current.style.height = "auto"
+      textareaRef.current.style.height = "112px"
     }
   }, [value, images, isStreaming, onSend])
 
   const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    (e: KeyboardEvent<HTMLTextAreaElement>) => {
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault()
         handleSend()
@@ -65,31 +66,27 @@ export function ChatInput({
     }
   }, [])
 
-  const handlePaste = useCallback((e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+  const handlePaste = useCallback((e: ClipboardEvent<HTMLTextAreaElement>) => {
     const files = e.clipboardData.files
     if (files && files.length > 0) {
       addImages(files)
-      // If we consumed image files, prevent default only if there was no text being pasted
-      if (Array.from(files).some((f) => f.type.startsWith("image/"))) {
-        // Don't prevent default completely — allow text paste while also capturing images
-      }
     }
   }, [addImages])
 
-  const handleDrop = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+  const handleDrop = useCallback((e: DragEvent<HTMLDivElement>) => {
     e.preventDefault()
     e.stopPropagation()
     setIsDragging(false)
     addImages(e.dataTransfer.files)
   }, [addImages])
 
-  const handleDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+  const handleDragOver = useCallback((e: DragEvent<HTMLDivElement>) => {
     e.preventDefault()
     e.stopPropagation()
     setIsDragging(true)
   }, [])
 
-  const handleDragLeave = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+  const handleDragLeave = useCallback((e: DragEvent<HTMLDivElement>) => {
     e.preventDefault()
     e.stopPropagation()
     setIsDragging(false)
@@ -99,7 +96,6 @@ export function ChatInput({
     setImages((prev) => prev.filter((_, i) => i !== index))
   }, [])
 
-  // Stable object URLs for image previews — revoked on unmount or when images change
   const imageUrls = useMemo(() => images.map((file) => URL.createObjectURL(file)), [images])
   useEffect(() => {
     return () => {
@@ -107,101 +103,117 @@ export function ChatInput({
     }
   }, [imageUrls])
 
+  const canPickModel = Boolean(onOpenModelPicker) && models.length > 0
+  const canSend = Boolean(value.trim()) || images.length > 0
+
   return (
     <div
-      className={`border-t bg-background transition-colors ${isDragging ? "bg-primary/5 ring-1 ring-primary/30" : ""}`}
+      className={`border-t bg-background p-3 transition-colors ${isDragging ? "bg-primary/5" : ""}`}
       onDrop={handleDrop}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
     >
-      {images.length > 0 && (
-        <div className="flex gap-2 overflow-x-auto border-b px-3 py-2">
-          {images.map((file, i) => (
-            <div key={`${file.name}-${i}`} className="relative shrink-0 rounded-md border bg-muted/50 p-1">
-              <img
-                src={imageUrls[i]}
-                alt={file.name}
-                className="h-16 w-16 rounded object-cover"
-              />
-              <button
-                type="button"
-                onClick={() => removeImage(i)}
-                className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-destructive text-[10px] text-destructive-foreground hover:bg-destructive/90"
-              >
-                <X className="h-3 w-3" />
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-      <div className="flex items-end gap-2 p-3">
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept="image/*"
-          multiple
-          className="hidden"
-          onChange={(e) => {
-            addImages(e.target.files)
-            if (fileInputRef.current) fileInputRef.current.value = ""
-          }}
-        />
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-9 w-9 shrink-0"
-          onClick={() => fileInputRef.current?.click()}
-          disabled={isStreaming}
-          title="添加图片"
-        >
-          <Paperclip className="h-4 w-4" />
-        </Button>
-        {(models.length > 0 || onOpenModelPicker) && (
-          <button
-            type="button"
-            className="flex h-9 max-w-[150px] shrink-0 items-center gap-1.5 rounded-md border bg-background px-2 text-left text-xs outline-none transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50 sm:max-w-[190px]"
-            disabled={isStreaming || models.length === 0}
-            title={`${brandName ? `${brandName} · ` : ""}${selectedModel || "选择模型"}`}
-            onClick={onOpenModelPicker}
-          >
-            <Bot className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-            <span className="min-w-0 truncate">{selectedModel || "模型"}</span>
-            <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-          </button>
+      <div
+        className={`mx-auto flex w-full max-w-4xl flex-col overflow-hidden rounded-lg border bg-background shadow-sm transition-colors ${
+          isDragging ? "border-primary/50 ring-1 ring-primary/30" : "border-border"
+        }`}
+      >
+        {images.length > 0 && (
+          <div className="flex gap-2 overflow-x-auto border-b bg-muted/20 px-3 py-2">
+            {images.map((file, i) => (
+              <div key={`${file.name}-${i}`} className="relative shrink-0 rounded-md border bg-background p-1">
+                <img
+                  src={imageUrls[i]}
+                  alt={file.name}
+                  className="h-16 w-16 rounded object-cover"
+                />
+                <button
+                  type="button"
+                  onClick={() => removeImage(i)}
+                  className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                  title="移除图片"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </div>
+            ))}
+          </div>
         )}
+
         <textarea
           ref={textareaRef}
           value={value}
           onChange={handleInput}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
-          placeholder={placeholder ?? "输入消息…（Enter 发送，Shift+Enter 换行，支持粘贴/拖拽图片）"}
+          placeholder={placeholder ?? "输入消息，Enter 发送，Shift+Enter 换行。支持粘贴或拖拽图片。"}
           disabled={isStreaming}
-          rows={1}
-          className="flex-1 resize-none rounded-md border bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
-          style={{ maxHeight: "120px", overflowY: "auto" }}
+          rows={4}
+          className="min-h-28 w-full resize-none border-0 bg-transparent px-3 py-3 text-sm leading-6 placeholder:text-muted-foreground focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+          style={{ height: "112px", maxHeight: "220px", overflowY: "auto" }}
         />
-        {isStreaming ? (
-          <Button
-            variant="destructive"
-            size="icon"
-            onClick={onStop}
-            className="shrink-0"
-            title="停止生成"
-          >
-            <Square className="h-4 w-4" />
-          </Button>
-        ) : (
-          <Button
-            size="icon"
-            onClick={handleSend}
-            disabled={!value.trim() && images.length === 0}
-            className="shrink-0"
-            title="发送消息"
-          >
-            <Send className="h-4 w-4" />
-          </Button>
-        )}
+
+        <div className="flex min-h-11 items-center justify-between gap-2 border-t bg-muted/20 px-2 py-2">
+          <div className="flex min-w-0 items-center gap-1.5">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              multiple
+              className="hidden"
+              onChange={(e) => {
+                addImages(e.target.files)
+                if (fileInputRef.current) fileInputRef.current.value = ""
+              }}
+            />
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 shrink-0"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={isStreaming}
+              title="添加图片"
+            >
+              <Paperclip className="h-4 w-4" />
+            </Button>
+
+            {(models.length > 0 || onOpenModelPicker) && (
+              <button
+                type="button"
+                className="flex h-8 max-w-[180px] shrink-0 items-center gap-1.5 rounded-md border bg-background px-2 text-left text-xs outline-none transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50 sm:max-w-[240px]"
+                disabled={isStreaming || !canPickModel}
+                title={`${brandName ? `${brandName} · ` : ""}${selectedModel || "选择模型"}`}
+                onClick={onOpenModelPicker}
+              >
+                <Bot className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                <span className="min-w-0 truncate">{selectedModel || "选择模型"}</span>
+                <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              </button>
+            )}
+          </div>
+
+          {isStreaming ? (
+            <Button
+              variant="destructive"
+              size="icon"
+              onClick={onStop}
+              className="h-8 w-8 shrink-0"
+              title="停止生成"
+            >
+              <Square className="h-4 w-4" />
+            </Button>
+          ) : (
+            <Button
+              size="icon"
+              onClick={handleSend}
+              disabled={!canSend}
+              className="h-8 w-8 shrink-0"
+              title="发送消息"
+            >
+              <Send className="h-4 w-4" />
+            </Button>
+          )}
+        </div>
       </div>
     </div>
   )

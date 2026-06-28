@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react"
+import { useState } from "react"
 import {
   FileText, FolderOpen, Search, Network, ClipboardCheck, Settings, ArrowLeftRight, ClipboardList, Globe, TrendingUp, PenLine, BarChart3, Target, Filter,
 } from "lucide-react"
@@ -120,23 +120,6 @@ export function IconSidebar({ onSwitchProject }: IconSidebarProps) {
   const researchActiveCount = useResearchStore((s) => s.tasks.filter((t) => t.status !== "done" && t.status !== "error").length)
   const toggleResearchPanel = useResearchStore((s) => s.setPanelOpen)
 
-  // Daemon health check
-  const [daemonStatus, setDaemonStatus] = useState<string>("starting")
-  useEffect(() => {
-    const check = async () => {
-      try {
-        const { clipServerStatus } = await import("@/commands/fs")
-        const status = await clipServerStatus()
-        setDaemonStatus(status)
-      } catch {
-        setDaemonStatus("error")
-      }
-    }
-    check()
-    const interval = setInterval(check, 30000)
-    return () => clearInterval(interval)
-  }, [])
-
   const [templateDialogOpen, setTemplateDialogOpen] = useState(false)
 
   async function createQuickReviewFile(template: ReviewTemplate) {
@@ -249,25 +232,8 @@ export function IconSidebar({ onSwitchProject }: IconSidebarProps) {
             )}
           </button>
         </div>
-        {/* Bottom: daemon status + settings + switch project + account login */}
+        {/* Bottom: settings + switch project + account login */}
         <div className="flex flex-col gap-0.5 px-1.5 pb-1">
-          {/* Daemon status indicator */}
-          <div className="flex h-7 w-full items-center gap-2.5 px-3 text-xs text-muted-foreground">
-            <span
-              className={`h-2.5 w-2.5 shrink-0 rounded-full ${
-                daemonStatus === "running" ? "bg-emerald-500" :
-                daemonStatus === "starting" ? "bg-amber-400 animate-pulse" :
-                daemonStatus === "port_conflict" ? "bg-red-500" :
-                "bg-red-500 animate-pulse"
-              }`}
-            />
-            <span className="flex-1 truncate">
-              {daemonStatus === "running" && "Clip 服务运行中"}
-              {daemonStatus === "starting" && "Clip 服务启动中…"}
-              {daemonStatus === "port_conflict" && "端口 19827 被占用"}
-              {daemonStatus === "error" && "Clip 服务出错，重启中…"}
-            </span>
-          </div>
           <button
             onClick={() => setActiveView("settings")}
             className={`${rowBase} ${activeView === "settings" ? rowActive : rowIdle}`}
