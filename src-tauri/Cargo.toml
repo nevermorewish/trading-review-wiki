@@ -1,6 +1,6 @@
 [package]
 name = "trading-review-wiki"
-version = "0.10.5"
+version = "1.0.1"
 description = "寰星Agent - A personal trading knowledge base powered by LLM"
 authors = []
 edition = "2021"
@@ -36,10 +36,16 @@ lancedb = "0.27.2"
 arrow-array = "57"
 arrow-schema = "57"
 futures = "0.3"
+futures-util = "0.3"
 rand = "0.8"
-reqwest = { version = "0.12", features = ["json", "cookies"] }
+reqwest = { version = "0.12", features = ["json", "cookies", "stream"] }
 tokio-postgres = "0.7"
 walkdir = "2"
+sha2 = "0.10"
+dirs = "6"
+open = "5"
+url = "2"
+urlencoding = "2"
 
 [profile.release]
 codegen-units = 1

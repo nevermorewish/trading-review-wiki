@@ -1,5 +1,6 @@
 pub mod body_residue;
 pub mod cleanup_garbage;
+pub mod desktop_update;
 pub mod frogclaw;
 pub mod fs;
 pub mod http;

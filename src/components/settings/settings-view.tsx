@@ -788,7 +788,7 @@ function BrandLoginSection() {
         </Button>
       )}
       <p className="text-xs text-muted-foreground">
-        账号登录和模型选择与侧栏、对话窗口共用同一套 Hermes 流程。保存模型后会自动写入当前 LLM 配置。
+        账号登录和模型选择与侧栏、对话窗口共用同一套 TradeReview 流程。保存模型后会自动写入当前 LLM 配置。
       </p>
       <AccountLoginDialog open={open} onOpenChange={setOpen} configuredModels={brandAuth.models} />
     </div>

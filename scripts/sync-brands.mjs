@@ -3,7 +3,7 @@
 // for the runtime-selectable brand presets) and generates
 // src/lib/brands.generated.ts, consumed by src/lib/brands.ts.
 //
-// Modeled on HuanXing-Hermes' scripts/sync-brand.mjs, but this app picks a brand
+// Modeled on TradeReview's scripts/sync-brand.mjs, but this app picks a brand
 // at RUNTIME (login screen), so the generated module exports ALL brands as a
 // list rather than one active brand.
 //

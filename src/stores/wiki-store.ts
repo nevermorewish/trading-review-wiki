@@ -126,7 +126,7 @@ export const useWikiStore = create<WikiState>((set) => ({
   },
 
   brandAuth: {
-    brandId: "huanxinghermes",
+    brandId: "huanxingtradereview",
     baseUrl: "",
     username: "",
     userId: null,

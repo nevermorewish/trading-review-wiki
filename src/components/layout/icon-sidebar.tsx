@@ -248,7 +248,7 @@ export function IconSidebar({ onSwitchProject }: IconSidebarProps) {
             <ArrowLeftRight className="h-4 w-4 shrink-0" />
             <span className="flex-1 truncate text-left">{t("nav.switchProject")}</span>
           </button>
-          {/* Account login (mirrors Hermes bottom-left login area) */}
+          {/* Account login (mirrors TradeReview bottom-left login area) */}
           <AccountLoginButton />
         </div>
       </div>

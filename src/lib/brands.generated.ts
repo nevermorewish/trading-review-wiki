@@ -22,7 +22,7 @@ export interface Brand {
 
 export const BRANDS: readonly Brand[] = [
   {
-    "id": "huanxinghermes",
+    "id": "huanxingtradereview",
     "name": "寰星Agent",
     "defaultBaseUrl": "https://api.huanxing.ai",
     "group": "default",
@@ -52,7 +52,7 @@ export const BRANDS: readonly Brand[] = [
     }
   },
   {
-    "id": "frogclawhermes",
+    "id": "frogclawtradereview",
     "name": "FrogClaw助手",
     "defaultBaseUrl": "https://frogclaw.com",
     "group": "default",
@@ -72,7 +72,7 @@ export const BRANDS: readonly Brand[] = [
     "accountModelDescriptions": {}
   },
   {
-    "id": "fengchihermes",
+    "id": "fengchitradereview",
     "name": "风驰云",
     "defaultBaseUrl": "https://ai.fengchiyun.com",
     "group": "default",
@@ -93,4 +93,4 @@ export const BRANDS: readonly Brand[] = [
   },
 ] as const
 
-export const DEFAULT_BRAND_ID = "huanxinghermes"
+export const DEFAULT_BRAND_ID = "huanxingtradereview"

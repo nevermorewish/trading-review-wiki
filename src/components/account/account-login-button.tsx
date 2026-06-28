@@ -16,7 +16,7 @@ async function openExternal(url: string) {
 }
 
 /**
- * Bottom-left account entry (mirrors HuanXing-Hermes' AccountLoginButton).
+ * Bottom-left account entry (mirrors TradeReview's AccountLoginButton).
  * Logged-out: a "登录" button. Logged-in: the account name + brand, click to
  * manage (switch model / log out). Opens {@link AccountLoginDialog}.
  */

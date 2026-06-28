@@ -15,6 +15,7 @@ import { ensureDefaultReview } from "@/lib/default-review"
 import { AppLayout } from "@/components/layout/app-layout"
 import { WelcomeScreen } from "@/components/project/welcome-screen"
 import { CreateProjectDialog } from "@/components/project/create-project-dialog"
+import { DesktopUpdateNotifier } from "@/components/desktop-update-notifier"
 import type { WikiProject } from "@/types/wiki"
 
 function App() {
@@ -244,6 +245,7 @@ function App() {
   if (!project) {
     return (
       <>
+        <DesktopUpdateNotifier />
         <WelcomeScreen
           onCreateProject={() => setShowCreateDialog(true)}
           onOpenProject={handleOpenProject}
@@ -260,6 +262,7 @@ function App() {
 
   return (
     <>
+      <DesktopUpdateNotifier />
       <AppLayout onSwitchProject={handleSwitchProject} />
       <CreateProjectDialog
         open={showCreateDialog}

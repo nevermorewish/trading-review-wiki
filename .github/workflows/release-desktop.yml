@@ -1,0 +1,479 @@
+# Build desktop installers and publish update manifests.
+# The workflow currently builds Windows installers for all TradeReview brands.
+# macOS packaging scripts are kept in scripts/build-desktop-macos.sh for a
+# later workflow expansion.
+
+name: release-desktop
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag name to associate the build with (e.g. v0.10.6)"
+        required: true
+      remote_path:
+        description: "Linux server download root. Use /www/wwwroot/downloads, or leave empty to use LINUX_DEPLOY_PATH."
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-desktop
+  cancel-in-progress: true
+
+env:
+  UPDATE_FEED_BASE_URL: https://ai.fengchiyun.com/downloads
+  TRADING_REVIEW_UPDATE_DOWNLOAD_URL: https://api.huanxing.ai/tradereview-client
+
+jobs:
+  resolve-brands:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+      brands: ${{ steps.matrix.outputs.brands }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve brand matrix
+        id: matrix
+        shell: bash
+        run: |
+          node - <<'NODE'
+          const fs = require("node:fs");
+          const path = require("node:path");
+
+          const brands = fs.readdirSync(path.join(process.cwd(), "brands"))
+            .filter((name) => name.endsWith(".json"))
+            .map((name) => {
+              const raw = JSON.parse(fs.readFileSync(path.join("brands", name), "utf8"));
+              return {
+                brand: raw.id,
+                name: raw.name || raw.id,
+                order: Number.isFinite(raw.order) ? raw.order : 999,
+              };
+            })
+            .sort((a, b) => (a.order - b.order) || a.brand.localeCompare(b.brand));
+
+          if (brands.length === 0) {
+            throw new Error("No brand configs found under brands/");
+          }
+
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `brands=${brands.map((b) => b.brand).join(", ")}\n`);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `matrix=${JSON.stringify(brands)}\n`);
+          NODE
+
+  prepare-release:
+    needs: resolve-brands
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create or reuse GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || github.token }}
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          BUILT_BRANDS: ${{ needs.resolve-brands.outputs.brands }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" >/dev/null
+
+          if gh release view "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $RELEASE_TAG already exists."
+            exit 0
+          fi
+
+          notes_file="$RUNNER_TEMP/release-notes.md"
+          cat > "$notes_file" <<EOF
+          Automated TradeReview desktop installers.
+
+          Built brands: $BUILT_BRANDS.
+
+          This release currently builds Windows installers. macOS packaging is
+          prepared in scripts/build-desktop-macos.sh but is not enabled in the
+          release matrix yet.
+          EOF
+
+          prerelease_args=()
+          if [[ "$RELEASE_TAG" == *-alpha* || "$RELEASE_TAG" == *-beta* || "$RELEASE_TAG" == *-rc* ]]; then
+            prerelease_args+=(--prerelease)
+          fi
+
+          gh release create "$RELEASE_TAG" \
+            -R "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --title "TradeReview Desktop $RELEASE_TAG" \
+            --notes-file "$notes_file" \
+            "${prerelease_args[@]}"
+
+  build-windows:
+    needs: [resolve-brands, prepare-release]
+    name: Build ${{ matrix.brand }} / Windows
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.resolve-brands.outputs.matrix) }}
+
+    env:
+      BRAND: ${{ matrix.brand }}
+      TARGET: x86_64-pc-windows-msvc
+      RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+      TRADING_REVIEW_UPDATE_MANIFEST_URL: https://ai.fengchiyun.com/downloads/${{ matrix.brand }}/latest.json
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "src-tauri -> src-tauri/target"
+
+      - name: Install JS deps
+        run: npm ci
+
+      - name: Build Windows installer
+        run: npm run tauri -- build --bundles nsis --target $env:TARGET
+
+      - name: Upload installer to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || github.token }}
+        shell: pwsh
+        run: |
+          $bundleDir = "src-tauri/target/$env:TARGET/release/bundle/nsis"
+          if (!(Test-Path $bundleDir)) {
+            throw "Missing Tauri bundle output: $bundleDir"
+          }
+
+          $assets = Get-ChildItem $bundleDir -File |
+            Where-Object { $_.Name -ne 'builder-debug.yml' -and $_.Extension -in @('.exe', '.msi') }
+
+          if ($assets.Count -eq 0) {
+            throw "No Windows installer asset found under $bundleDir"
+          }
+
+          $releaseAssetDir = "release-assets/$env:BRAND"
+          New-Item -ItemType Directory -Force -Path $releaseAssetDir | Out-Null
+
+          foreach ($asset in $assets) {
+            $releaseName = "$env:BRAND-$($asset.Name)"
+            $releasePath = Join-Path $releaseAssetDir $releaseName
+            Copy-Item $asset.FullName -Destination $releasePath -Force
+            gh release upload $env:RELEASE_TAG $releasePath --repo $env:GITHUB_REPOSITORY --clobber
+          }
+
+      - name: Prepare update payload
+        id: upload_payload
+        env:
+          RUNTIME_PLATFORM: win32
+          RUNTIME_ARCH: x64
+        shell: pwsh
+        run: |
+          $package = Get-Content package.json -Raw | ConvertFrom-Json
+          $version = [string]$package.version
+          $channel = 'latest'
+          if ($version -match '-([A-Za-z]+)') {
+            $channel = $Matches[1]
+          }
+
+          $source = "src-tauri/target/$env:TARGET/release/bundle/nsis"
+          if (!(Test-Path $source)) {
+            throw "Missing Tauri bundle output: $source"
+          }
+
+          $channelOut = "release-upload/$env:BRAND/$channel"
+          $archiveOut = "release-upload/$env:BRAND/releases/v$version"
+          New-Item -ItemType Directory -Force -Path $channelOut, $archiveOut | Out-Null
+
+          $files = Get-ChildItem $source -File |
+            Where-Object { $_.Name -ne 'builder-debug.yml' -and $_.Extension -in @('.exe', '.msi') }
+          if ($files.Count -eq 0) {
+            throw "No release files found under $source"
+          }
+
+          $files | ForEach-Object {
+            Copy-Item $_.FullName -Destination $channelOut -Force
+            Copy-Item $_.FullName -Destination $archiveOut -Force
+          }
+
+          $assetFile = $files |
+            Where-Object { $_.Extension -in @('.exe', '.msi') } |
+            Select-Object -First 1
+          if (-not $assetFile) {
+            throw "No installer asset found under $source"
+          }
+
+          $encodedFileName = [Uri]::EscapeDataString($assetFile.Name)
+          $githubAssetFileName = "$env:BRAND-$($assetFile.Name)"
+          $encodedGithubAssetFileName = [Uri]::EscapeDataString($githubAssetFileName)
+          $assetSha256 = (Get-FileHash -Algorithm SHA256 $assetFile.FullName).Hash.ToLowerInvariant()
+          $assetPatchPath = "release-upload/$env:BRAND/windows-asset.json"
+          $assetPatch = [ordered]@{
+            platformKey = 'windows'
+            asset = [ordered]@{
+              label = 'Windows installer'
+              platform = 'windows'
+              fileName = $assetFile.Name
+              size = $assetFile.Length
+              sha256 = $assetSha256
+              url = "$env:UPDATE_FEED_BASE_URL/$env:BRAND/$channel/$encodedFileName"
+              versionedUrl = "$env:UPDATE_FEED_BASE_URL/$env:BRAND/releases/v$version/$encodedFileName"
+              sourceUrl = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/$env:RELEASE_TAG/$encodedGithubAssetFileName"
+            }
+          }
+          $assetPatch | ConvertTo-Json -Depth 20 | Set-Content -Path $assetPatchPath -Encoding utf8
+
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "channel=$channel" >> $env:GITHUB_OUTPUT
+          "channel_dir=$channelOut" >> $env:GITHUB_OUTPUT
+          "archive_dir=$archiveOut" >> $env:GITHUB_OUTPUT
+          "asset_patch=$assetPatchPath" >> $env:GITHUB_OUTPUT
+
+      - name: Configure SSH for Linux upload
+        env:
+          SECRET_LINUX_DEPLOY_HOST: ${{ secrets.LINUX_DEPLOY_HOST }}
+          SECRET_LINUX_DEPLOY_PORT: ${{ secrets.LINUX_DEPLOY_PORT }}
+          SECRET_LINUX_DEPLOY_USER: ${{ secrets.LINUX_DEPLOY_USER }}
+          VAR_LINUX_DEPLOY_HOST: ${{ vars.LINUX_DEPLOY_HOST }}
+          VAR_LINUX_DEPLOY_PORT: ${{ vars.LINUX_DEPLOY_PORT }}
+          VAR_LINUX_DEPLOY_USER: ${{ vars.LINUX_DEPLOY_USER }}
+          LINUX_DEPLOY_KEY: ${{ secrets.LINUX_DEPLOY_KEY }}
+          LINUX_DEPLOY_KNOWN_HOSTS: ${{ secrets.LINUX_DEPLOY_KNOWN_HOSTS }}
+          SECRET_LINUX_DEPLOY_PATH: ${{ secrets.LINUX_DEPLOY_PATH }}
+          VAR_LINUX_DEPLOY_PATH: ${{ vars.LINUX_DEPLOY_PATH }}
+          INPUT_REMOTE_PATH: ${{ inputs.remote_path }}
+        shell: pwsh
+        run: |
+          $deployHost = if ([string]::IsNullOrWhiteSpace($env:SECRET_LINUX_DEPLOY_HOST)) { $env:VAR_LINUX_DEPLOY_HOST } else { $env:SECRET_LINUX_DEPLOY_HOST }
+          $deployPort = if ([string]::IsNullOrWhiteSpace($env:SECRET_LINUX_DEPLOY_PORT)) { $env:VAR_LINUX_DEPLOY_PORT } else { $env:SECRET_LINUX_DEPLOY_PORT }
+          $deployUser = if ([string]::IsNullOrWhiteSpace($env:SECRET_LINUX_DEPLOY_USER)) { $env:VAR_LINUX_DEPLOY_USER } else { $env:SECRET_LINUX_DEPLOY_USER }
+          $configuredRemotePath = if ([string]::IsNullOrWhiteSpace($env:SECRET_LINUX_DEPLOY_PATH)) { $env:VAR_LINUX_DEPLOY_PATH } else { $env:SECRET_LINUX_DEPLOY_PATH }
+
+          if ([string]::IsNullOrWhiteSpace($deployHost)) { $deployHost = '43.224.248.112' }
+          if ([string]::IsNullOrWhiteSpace($deployUser)) { $deployUser = 'root' }
+
+          $missing = @()
+          if ([string]::IsNullOrWhiteSpace($env:LINUX_DEPLOY_KEY)) { $missing += 'secrets.LINUX_DEPLOY_KEY' }
+          if ([string]::IsNullOrWhiteSpace($env:INPUT_REMOTE_PATH) -and [string]::IsNullOrWhiteSpace($configuredRemotePath)) {
+            $missing += 'workflow input remote_path, secrets.LINUX_DEPLOY_PATH, or vars.LINUX_DEPLOY_PATH'
+          }
+          if ($missing.Count -gt 0) {
+            throw "Missing Linux upload configuration: $($missing -join ', ')"
+          }
+
+          $port = if ([string]::IsNullOrWhiteSpace($deployPort)) { '22' } else { $deployPort }
+          $remotePath = if ([string]::IsNullOrWhiteSpace($env:INPUT_REMOTE_PATH)) { $configuredRemotePath } else { $env:INPUT_REMOTE_PATH }
+          $remotePath = $remotePath.TrimEnd('/')
+
+          $sshDir = Join-Path $HOME '.ssh'
+          New-Item -ItemType Directory -Force -Path $sshDir | Out-Null
+
+          $keyMaterial = $env:LINUX_DEPLOY_KEY
+          if ($keyMaterial.Contains('\n')) {
+            $keyMaterial = $keyMaterial -replace '\\n', "`n"
+          }
+          $keyMaterial = $keyMaterial -replace "`r`n", "`n" -replace "`r", "`n"
+          if (-not $keyMaterial.EndsWith("`n")) {
+            $keyMaterial = "$keyMaterial`n"
+          }
+          $keyHeader = ($keyMaterial -split "`n" | Select-Object -First 1).Trim()
+          if ($keyHeader -notmatch '^-----BEGIN .*PRIVATE KEY-----$') {
+            throw "LINUX_DEPLOY_KEY is not an OpenSSH/PEM private key. Store the full private key content, not a path or public key."
+          }
+
+          $keyPath = Join-Path $sshDir 'linux_deploy_key'
+          $keyMaterial | Set-Content -Path $keyPath -NoNewline -Encoding ascii
+          icacls $keyPath /inheritance:r | Out-Null
+          icacls $keyPath /grant:r "$($env:USERNAME):R" | Out-Null
+
+          $knownHostsPath = Join-Path $sshDir 'known_hosts'
+          if ([string]::IsNullOrWhiteSpace($env:LINUX_DEPLOY_KNOWN_HOSTS)) {
+            New-Item -ItemType File -Force -Path $knownHostsPath | Out-Null
+            $strictHostKeyChecking = 'accept-new'
+          } else {
+            ($env:LINUX_DEPLOY_KNOWN_HOSTS -replace "`r`n", "`n") | Set-Content -Path $knownHostsPath -NoNewline -Encoding ascii
+            $strictHostKeyChecking = 'yes'
+          }
+
+          "SSH_KEY_PATH=$keyPath" >> $env:GITHUB_ENV
+          "SSH_KNOWN_HOSTS_PATH=$knownHostsPath" >> $env:GITHUB_ENV
+          "SSH_STRICT_HOST_KEY_CHECKING=$strictHostKeyChecking" >> $env:GITHUB_ENV
+          "LINUX_DEPLOY_HOST=$deployHost" >> $env:GITHUB_ENV
+          "LINUX_DEPLOY_PORT=$port" >> $env:GITHUB_ENV
+          "LINUX_DEPLOY_USER=$deployUser" >> $env:GITHUB_ENV
+          "LINUX_DEPLOY_REMOTE_PATH=$remotePath" >> $env:GITHUB_ENV
+
+      - name: Upload package and latest.json to Linux server
+        env:
+          VERSION: ${{ steps.upload_payload.outputs.version }}
+          CHANNEL: ${{ steps.upload_payload.outputs.channel }}
+          CHANNEL_DIR: ${{ steps.upload_payload.outputs.channel_dir }}
+          ARCHIVE_DIR: ${{ steps.upload_payload.outputs.archive_dir }}
+          ASSET_PATCH: ${{ steps.upload_payload.outputs.asset_patch }}
+        shell: pwsh
+        run: |
+          function Quote-RemotePath([string]$value) {
+            return "'" + $value.Replace("'", "'\''") + "'"
+          }
+
+          function Invoke-SshCommand([string]$command, [string]$failureMessage) {
+            ssh `
+              -i $env:SSH_KEY_PATH `
+              -o "UserKnownHostsFile=$env:SSH_KNOWN_HOSTS_PATH" `
+              -o "StrictHostKeyChecking=$env:SSH_STRICT_HOST_KEY_CHECKING" `
+              -o "BatchMode=yes" `
+              -p $env:LINUX_DEPLOY_PORT `
+              "$env:LINUX_DEPLOY_USER@$env:LINUX_DEPLOY_HOST" `
+              $command
+            if ($LASTEXITCODE -ne 0) {
+              throw "$failureMessage (exit code $LASTEXITCODE)"
+            }
+          }
+
+          function Read-SshCommand([string]$command, [string]$failureMessage) {
+            $output = ssh `
+              -i $env:SSH_KEY_PATH `
+              -o "UserKnownHostsFile=$env:SSH_KNOWN_HOSTS_PATH" `
+              -o "StrictHostKeyChecking=$env:SSH_STRICT_HOST_KEY_CHECKING" `
+              -o "BatchMode=yes" `
+              -p $env:LINUX_DEPLOY_PORT `
+              "$env:LINUX_DEPLOY_USER@$env:LINUX_DEPLOY_HOST" `
+              $command
+            if ($LASTEXITCODE -ne 0) {
+              throw "$failureMessage (exit code $LASTEXITCODE)"
+            }
+            return $output
+          }
+
+          function Invoke-RemoteUpload([string]$filePath, [string]$remoteDirectory, [string]$label) {
+            scp `
+              -i $env:SSH_KEY_PATH `
+              -o "UserKnownHostsFile=$env:SSH_KNOWN_HOSTS_PATH" `
+              -o "StrictHostKeyChecking=$env:SSH_STRICT_HOST_KEY_CHECKING" `
+              -o "BatchMode=yes" `
+              -P $env:LINUX_DEPLOY_PORT `
+              $filePath "$env:LINUX_DEPLOY_USER@$env:LINUX_DEPLOY_HOST`:$remoteDirectory/"
+            if ($LASTEXITCODE -ne 0) {
+              throw "Failed to upload $label file: $filePath"
+            }
+          }
+
+          function Get-SemverParts([string]$value) {
+            $normalized = $value.Trim().TrimStart('v')
+            if ($normalized -notmatch '^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+.*)?$') {
+              return $null
+            }
+
+            return [pscustomobject]@{
+              Major = [int]$Matches[1]
+              Minor = [int]$Matches[2]
+              Patch = [int]$Matches[3]
+              Prerelease = if ($Matches.Count -gt 4) { [string]$Matches[4] } else { '' }
+            }
+          }
+
+          function Compare-Semver([string]$left, [string]$right) {
+            $leftParts = Get-SemverParts $left
+            $rightParts = Get-SemverParts $right
+            if (-not $leftParts -or -not $rightParts) {
+              return [string]::Compare($left, $right, [System.StringComparison]::OrdinalIgnoreCase)
+            }
+
+            foreach ($part in @('Major', 'Minor', 'Patch')) {
+              if ($leftParts.$part -gt $rightParts.$part) { return 1 }
+              if ($leftParts.$part -lt $rightParts.$part) { return -1 }
+            }
+
+            if ([string]::IsNullOrWhiteSpace($leftParts.Prerelease) -and -not [string]::IsNullOrWhiteSpace($rightParts.Prerelease)) {
+              return 1
+            }
+            if (-not [string]::IsNullOrWhiteSpace($leftParts.Prerelease) -and [string]::IsNullOrWhiteSpace($rightParts.Prerelease)) {
+              return -1
+            }
+
+            return [string]::Compare($leftParts.Prerelease, $rightParts.Prerelease, [System.StringComparison]::OrdinalIgnoreCase)
+          }
+
+          $remoteRoot = $env:LINUX_DEPLOY_REMOTE_PATH.TrimEnd('/', '\')
+          $feedPath = ([Uri]$env:UPDATE_FEED_BASE_URL).AbsolutePath.Trim('/')
+          $feedDir = if ($feedPath) { ($feedPath -split '/')[-1] } else { '' }
+          $remoteLeaf = Split-Path -Path $remoteRoot -Leaf
+          if ($feedDir -and $remoteLeaf -ne $feedDir) {
+            $remoteRoot = "$remoteRoot/$feedDir"
+          }
+
+          $destinationRoot = "$remoteRoot/$env:BRAND"
+          $channelDestination = "$destinationRoot/$env:CHANNEL"
+          $archiveDestination = "$destinationRoot/releases/v$env:VERSION"
+
+          Invoke-SshCommand "mkdir -p $(Quote-RemotePath $channelDestination) $(Quote-RemotePath $archiveDestination)" "Failed to create remote upload directories"
+
+          Get-ChildItem $env:CHANNEL_DIR -File | ForEach-Object {
+            Invoke-RemoteUpload $_.FullName $channelDestination "channel"
+          }
+          Get-ChildItem $env:ARCHIVE_DIR -File | ForEach-Object {
+            Invoke-RemoteUpload $_.FullName $archiveDestination "archive"
+          }
+
+          $assetPatch = Get-Content $env:ASSET_PATCH -Raw | ConvertFrom-Json
+          $latestDir = Join-Path $env:RUNNER_TEMP "$env:BRAND-latest"
+          New-Item -ItemType Directory -Force -Path $latestDir | Out-Null
+          $latestPath = Join-Path $latestDir "latest.json"
+          $remoteLatest = Quote-RemotePath "$destinationRoot/latest.json"
+          $remoteJsonLines = Read-SshCommand "if [ -f $remoteLatest ]; then cat $remoteLatest; fi" "Failed to read remote latest.json for $env:BRAND"
+
+          $now = (Get-Date).ToUniversalTime().ToString("o")
+          $remoteJson = ($remoteJsonLines -join "`n").Trim()
+          $manifest = $null
+          if (-not [string]::IsNullOrWhiteSpace($remoteJson)) {
+            try {
+              $candidate = $remoteJson | ConvertFrom-Json
+              $candidateSemver = [string]$candidate.semver
+              if ($candidateSemver -eq [string]$env:VERSION) {
+                $manifest = $candidate
+              } elseif ($candidateSemver -and (Compare-Semver $candidateSemver $env:VERSION) -gt 0) {
+                Write-Warning "Skipping latest.json update because remote latest.json already points at newer version $candidateSemver."
+                return
+              }
+            } catch {
+              Write-Host "Ignoring invalid remote latest.json: $($_.Exception.Message)"
+            }
+          }
+
+          if (-not $manifest) {
+            $manifest = [pscustomobject]@{
+              repository = $env:GITHUB_REPOSITORY
+              version = "v$env:VERSION"
+              semver = $env:VERSION
+              publishedAt = $now
+              sourceUrl = "https://github.com/$env:GITHUB_REPOSITORY/releases/tag/v$env:VERSION"
+              updatedAt = $now
+              assets = [pscustomobject]@{}
+            }
+          }
+          if (-not $manifest.PSObject.Properties['assets'] -or -not $manifest.assets) {
+            $manifest | Add-Member -MemberType NoteProperty -Name assets -Value ([pscustomobject]@{}) -Force
+          }
+          $manifest.updatedAt = $now
+          $manifest.assets | Add-Member -MemberType NoteProperty -Name $assetPatch.platformKey -Value $assetPatch.asset -Force
+          $manifest | ConvertTo-Json -Depth 20 | Set-Content -Path $latestPath -Encoding utf8
+
+          Invoke-SshCommand "mkdir -p $(Quote-RemotePath $destinationRoot)" "Failed to create remote manifest directory"
+          Invoke-RemoteUpload $latestPath $destinationRoot "latest.json"
+
+          Write-Host "Uploaded channel files to $env:UPDATE_FEED_BASE_URL/$env:BRAND/$env:CHANNEL/"
+          Write-Host "Uploaded archive files to $env:UPDATE_FEED_BASE_URL/$env:BRAND/releases/v$env:VERSION/"
+          Write-Host "Uploaded update manifest to $env:UPDATE_FEED_BASE_URL/$env:BRAND/latest.json"

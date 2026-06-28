@@ -57,6 +57,8 @@ pub fn run() {
             commands::normalize_dirs::normalize_wiki_dirs,
             commands::body_residue::body_residue_backup,
             commands::cleanup_garbage::cleanup_garbage_backup,
+            commands::desktop_update::desktop_check_update,
+            commands::desktop_update::desktop_install_update,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
