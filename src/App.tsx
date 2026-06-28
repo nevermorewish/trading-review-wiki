@@ -11,6 +11,7 @@ import { syncStockCodes } from "@/commands/stock-codes"
 import { loadReviewItems, loadChatHistory } from "@/lib/persist"
 import { setupAutoSave, teardownAutoSave } from "@/lib/auto-save"
 import { startClipWatcher, stopClipWatcher } from "@/lib/clip-watcher"
+import { ensureDefaultReview } from "@/lib/default-review"
 import { AppLayout } from "@/components/layout/app-layout"
 import { WelcomeScreen } from "@/components/project/welcome-screen"
 import { CreateProjectDialog } from "@/components/project/create-project-dialog"
@@ -87,6 +88,18 @@ function App() {
             }
           } catch (err) {
             console.warn("[App] Failed to open last project:", err)
+          }
+        } else if (!cancelled) {
+          // First launch (no remembered project): bootstrap the bundled default
+          // review library next to the exe and open it. Falls back to the
+          // welcome screen if anything goes wrong.
+          try {
+            const proj = await ensureDefaultReview()
+            if (!cancelled) {
+              await handleProjectOpened(proj)
+            }
+          } catch (err) {
+            console.warn("[App] Failed to init default review library:", err)
           }
         }
       } catch (err) {

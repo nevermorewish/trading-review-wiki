@@ -30,6 +30,23 @@ export async function listDirectory(path: string): Promise<FileNode[]> {
   return invoke<FileNode[]>("list_directory", { path })
 }
 
+export interface WikiPageMeta {
+  path: string
+  name: string
+  title: string
+  tags: string[]
+  origin?: string
+}
+
+/**
+ * Load metadata for every wiki page in one IPC call. The backend walks the
+ * directory and parses frontmatter natively, replacing a per-file readFile
+ * loop that made the knowledge tree do thousands of round-trips per refresh.
+ */
+export async function listWikiPages(wikiDir: string): Promise<WikiPageMeta[]> {
+  return invoke<WikiPageMeta[]>("list_wiki_pages", { wikiDir })
+}
+
 export async function copyFile(
   source: string,
   destination: string
@@ -79,6 +96,16 @@ export async function createProject(
 
 export async function openProject(path: string): Promise<WikiProject> {
   return invoke<WikiProject>("open_project", { path })
+}
+
+export interface DefaultReviewPaths {
+  reviewDir: string
+  defaultDir: string
+  bundledWikiDir: string
+}
+
+export async function getDefaultReviewPaths(): Promise<DefaultReviewPaths> {
+  return invoke<DefaultReviewPaths>("default_review_paths")
 }
 
 export async function clipServerStatus(): Promise<string> {

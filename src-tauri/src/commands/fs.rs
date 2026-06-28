@@ -755,6 +755,119 @@ fn build_tree(dir: &Path, depth: usize, max_depth: usize) -> Result<Vec<FileNode
     Ok(nodes)
 }
 
+/// Lightweight metadata for a single wiki page, parsed natively so the
+/// knowledge tree can load in one IPC call instead of reading every file
+/// individually from the frontend.
+#[derive(serde::Serialize)]
+pub struct WikiPageMeta {
+    pub path: String,
+    pub name: String,
+    pub title: String,
+    pub tags: Vec<String>,
+    pub origin: Option<String>,
+}
+
+/// Walk `wiki_dir` recursively and return metadata for every `.md` page
+/// (excluding `index.md` / `log.md`). Title/tags/origin are parsed from YAML
+/// frontmatter, falling back to the first heading then the filename. This
+/// replaces the frontend's per-file `readFile` loop, which made the knowledge
+/// tree do thousands of sequential IPC round-trips on every refresh.
+#[tauri::command]
+pub fn list_wiki_pages(wiki_dir: String) -> Result<Vec<WikiPageMeta>, String> {
+    let root = Path::new(&wiki_dir);
+    if !root.is_dir() {
+        // No wiki dir yet (fresh project) — return empty rather than erroring.
+        return Ok(Vec::new());
+    }
+    let mut pages = Vec::new();
+    collect_wiki_pages(root, &mut pages)?;
+    Ok(pages)
+}
+
+fn collect_wiki_pages(dir: &Path, pages: &mut Vec<WikiPageMeta>) -> Result<(), String> {
+    let entries = fs::read_dir(dir)
+        .map_err(|e| format!("Failed to read directory '{}': {}", dir.display(), e))?;
+    for entry in entries.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().to_string();
+        // Skip dotfiles/dirs (mirrors build_tree)
+        if name.starts_with('.') {
+            continue;
+        }
+        if path.is_dir() {
+            collect_wiki_pages(&path, pages)?;
+        } else if name.ends_with(".md") && name != "index.md" && name != "log.md" {
+            let content = fs::read_to_string(&path).unwrap_or_default();
+            pages.push(parse_wiki_page_meta(&path.to_string_lossy(), &name, &content));
+        }
+    }
+    Ok(())
+}
+
+/// Parse page title/tags/origin from frontmatter, matching the frontend's
+/// previous `parsePageInfo` behaviour (filename fallback uses `-` → space).
+fn parse_wiki_page_meta(path: &str, file_name: &str, content: &str) -> WikiPageMeta {
+    let default_title = file_name.trim_end_matches(".md").replace('-', " ");
+    let mut title = default_title.clone();
+    let mut tags: Vec<String> = Vec::new();
+    let mut origin: Option<String> = None;
+
+    // Extract frontmatter block between leading `---` fences.
+    if let Some(fm) = extract_frontmatter(content) {
+        for line in fm.lines() {
+            let trimmed = line.trim();
+            if let Some(rest) = trimmed.strip_prefix("title:") {
+                let val = rest.trim().trim_matches(|c| c == '"' || c == '\'').trim();
+                if !val.is_empty() {
+                    title = val.to_string();
+                }
+            } else if let Some(rest) = trimmed.strip_prefix("tags:") {
+                let rest = rest.trim();
+                if let Some(inner) = rest.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+                    tags = inner
+                        .split(',')
+                        .map(|t| t.trim().trim_matches(|c| c == '"' || c == '\'').to_string())
+                        .filter(|t| !t.is_empty())
+                        .collect();
+                }
+            } else if let Some(rest) = trimmed.strip_prefix("origin:") {
+                let val = rest.trim();
+                if !val.is_empty() {
+                    origin = Some(val.to_string());
+                }
+            }
+        }
+    }
+
+    // Fallback: first `# heading` if title is still the filename default.
+    if title == default_title {
+        for line in content.lines() {
+            if let Some(h) = line.strip_prefix("# ") {
+                let h = h.trim();
+                if !h.is_empty() {
+                    title = h.to_string();
+                    break;
+                }
+            }
+        }
+    }
+
+    WikiPageMeta {
+        path: path.to_string(),
+        name: file_name.to_string(),
+        title,
+        tags,
+        origin,
+    }
+}
+
+/// Return the text between the leading `---` / `---` frontmatter fences, if any.
+fn extract_frontmatter(content: &str) -> Option<&str> {
+    let rest = content.strip_prefix("---\n").or_else(|| content.strip_prefix("---\r\n"))?;
+    let end = rest.find("\n---")?;
+    Some(&rest[..end])
+}
+
 #[tauri::command]
 pub fn copy_file(source: String, destination: String) -> Result<(), String> {
     let dest = Path::new(&destination);

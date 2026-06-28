@@ -1,11 +1,11 @@
 import { useState, useEffect, useCallback } from "react"
 import {
   FileText, Users, Lightbulb, BookOpen, HelpCircle, GitMerge, BarChart3, ChevronRight, ChevronDown, Layout, Globe,
-  TrendingUp, Filter, Target, Calculator, AlertTriangle, Activity, Sparkles, FileCheck2,
+  TrendingUp, Filter, Target, Calculator, AlertTriangle, Activity, Sparkles, FileCheck2, Search, X,
 } from "lucide-react"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { useWikiStore } from "@/stores/wiki-store"
-import { readFile, listDirectory } from "@/commands/fs"
+import { listDirectory, listWikiPages } from "@/commands/fs"
 import type { FileNode } from "@/types/wiki"
 import { normalizePath } from "@/lib/path-utils"
 
@@ -75,6 +75,7 @@ export function KnowledgeTree() {
   const setSelectedFile = useWikiStore((s) => s.setSelectedFile)
   const fileTree = useWikiStore((s) => s.fileTree)
   const [pages, setPages] = useState<WikiPageInfo[]>([])
+  const [query, setQuery] = useState("")
   // Track collapsed groups (inverse of expanded) so newly-discovered Chinese
   // directories default to open instead of needing to be in a hardcoded list.
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
@@ -83,27 +84,16 @@ export function KnowledgeTree() {
     if (!project) return
     const pp = normalizePath(project.path)
     try {
-      const wikiTree = await listDirectory(`${pp}/wiki`)
-      const mdFiles = flattenMdFiles(wikiTree)
-
-      const pageInfos: WikiPageInfo[] = []
-      for (const file of mdFiles) {
-        // Skip index.md and log.md
-        if (file.name === "index.md" || file.name === "log.md") continue
-        try {
-          const content = await readFile(file.path)
-          const info = parsePageInfo(file.path, file.name, content)
-          pageInfos.push(info)
-        } catch {
-          pageInfos.push({
-            path: file.path,
-            title: file.name.replace(".md", "").replace(/-/g, " "),
-            group: wikiGroupOf(file.path),
-            tags: [],
-          })
-        }
-      }
-
+      // Single native call parses frontmatter for all pages — replaces the old
+      // per-file readFile loop that did thousands of IPC round-trips.
+      const metas = await listWikiPages(`${pp}/wiki`)
+      const pageInfos: WikiPageInfo[] = metas.map((m) => ({
+        path: m.path,
+        title: m.title,
+        group: wikiGroupOf(m.path),
+        tags: m.tags,
+        origin: m.origin,
+      }))
       setPages(pageInfos)
     } catch {
       setPages([])
@@ -123,9 +113,16 @@ export function KnowledgeTree() {
     )
   }
 
+  // Filter by title (case-insensitive). When searching, matching groups are
+  // force-expanded so hits are visible regardless of collapse state.
+  const q = query.trim().toLowerCase()
+  const visiblePages = q
+    ? pages.filter((p) => p.title.toLowerCase().includes(q))
+    : pages
+
   // Group pages by their wiki subdirectory
   const grouped = new Map<string, WikiPageInfo[]>()
-  for (const page of pages) {
+  for (const page of visiblePages) {
     const list = grouped.get(page.group) ?? []
     list.push(page)
     grouped.set(page.group, list)
@@ -149,22 +146,45 @@ export function KnowledgeTree() {
   }
 
   return (
-    <ScrollArea className="h-full">
-      <div className="p-2">
-        <div className="mb-2 px-2 text-xs font-semibold uppercase text-muted-foreground">
-          {project.name}
+    <div className="flex h-full flex-col">
+      <div className="shrink-0 border-b p-2">
+        <div className="relative">
+          <Search className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+          <input
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="搜索知识树…"
+            className="w-full rounded-md border bg-background py-1 pl-7 pr-7 text-sm outline-none focus:ring-1 focus:ring-ring"
+          />
+          {query && (
+            <button
+              onClick={() => setQuery("")}
+              className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:bg-accent"
+              title="清除"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
         </div>
-
-        {sortedGroups.length === 0 && (
-          <div className="px-2 py-4 text-center text-xs text-muted-foreground">
-            暂无知识库页面，导入资料后开始。
+      </div>
+      <ScrollArea className="flex-1">
+        <div className="p-2">
+          <div className="mb-2 px-2 text-xs font-semibold uppercase text-muted-foreground">
+            {project.name}
           </div>
-        )}
 
-        {sortedGroups.map(([group, items]) => {
-          const config = configFor(group)
-          const Icon = config.icon
-          const isExpanded = !collapsedGroups.has(group)
+          {sortedGroups.length === 0 && (
+            <div className="px-2 py-4 text-center text-xs text-muted-foreground">
+              {q ? "没有匹配的页面。" : "暂无知识库页面，导入资料后开始。"}
+            </div>
+          )}
+
+          {sortedGroups.map(([group, items]) => {
+            const config = configFor(group)
+            const Icon = config.icon
+            // While searching, force every group with hits open.
+            const isExpanded = q ? true : !collapsedGroups.has(group)
 
           return (
             <div key={group} className="mb-1">
@@ -205,13 +225,14 @@ export function KnowledgeTree() {
                 </div>
               )}
             </div>
-          )
-        })}
+            )
+          })}
 
-        {/* Raw sources quick access */}
-        <RawSourcesSection />
-      </div>
-    </ScrollArea>
+          {/* Raw sources quick access (hidden while searching the knowledge tree) */}
+          {!q && <RawSourcesSection />}
+        </div>
+      </ScrollArea>
+    </div>
   )
 }
 
@@ -269,50 +290,6 @@ function RawSourcesSection() {
       )}
     </div>
   )
-}
-
-function parsePageInfo(path: string, fileName: string, content: string): WikiPageInfo {
-  let title = fileName.replace(".md", "").replace(/-/g, " ")
-  const tags: string[] = []
-  let origin: string | undefined
-
-  // Parse YAML frontmatter
-  const fmMatch = content.match(/^---\n([\s\S]*?)\n---/)
-  if (fmMatch) {
-    const fm = fmMatch[1]
-
-    const titleMatch = fm.match(/^title:\s*["']?(.+?)["']?\s*$/m)
-    if (titleMatch) title = titleMatch[1].trim()
-
-    const tagsMatch = fm.match(/^tags:\s*\[(.+?)\]/m)
-    if (tagsMatch) {
-      tags.push(...tagsMatch[1].split(",").map((t) => t.trim().replace(/["']/g, "")))
-    }
-
-    const originMatch = fm.match(/^origin:\s*(.+)$/m)
-    if (originMatch) origin = originMatch[1].trim()
-  }
-
-  // Fallback: try first heading if no frontmatter title
-  if (title === fileName.replace(".md", "").replace(/-/g, " ")) {
-    const headingMatch = content.match(/^#\s+(.+)$/m)
-    if (headingMatch) title = headingMatch[1].trim()
-  }
-
-  // Group by the wiki subdirectory — the real organizing unit (Chinese or not).
-  return { path, title, group: wikiGroupOf(path), tags, origin }
-}
-
-function flattenMdFiles(nodes: FileNode[]): FileNode[] {
-  const files: FileNode[] = []
-  for (const node of nodes) {
-    if (node.is_dir && node.children) {
-      files.push(...flattenMdFiles(node.children))
-    } else if (!node.is_dir && node.name.endsWith(".md")) {
-      files.push(node)
-    }
-  }
-  return files
 }
 
 function flattenAllFiles(nodes: FileNode[]): FileNode[] {

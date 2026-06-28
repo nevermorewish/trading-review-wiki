@@ -1,0 +1,21 @@
+schema_version: 1
+title: CPO-NPO光引擎
+aliases:
+  - "CPO/NPO光引擎"
+  - "CPO NPO光引擎"
+  - "CPO光引擎"
+  - "NPO光引擎"
+  - "NPO-CW光源"
+  - "NPO外置CW光源"
+  - "LPO光模块"
+  - "3.2T光引擎"
+  - "3.2T NPO"
+  - "CPO交换机"
+  - "NPO交换机"
+  - "CPO/OIO"
+  - "OIO光互联"
+  - "全光化"
+  - "Spectrum-X CPO"
+  - "Quantum-X CPO"
+  - "NV NPO"
+  - "

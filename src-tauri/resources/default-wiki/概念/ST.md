@@ -1,0 +1,15 @@
+---
+schema_version: 1
+title: ST
+aliases: []
+type: 概念
+summary: ST 是由增量摄入维护的知识页面，用于沉淀新资料中的关键事实、判断变化、证据来源、相关关系和后续需要验证的问题。
+tags: []
+related: []
+sources:
+  - raw/日复盘/2026-05-28-每日复盘更新-盘前纪要.md
+created: 2026-05-28 11:13:16
+updated: 2026-05-28 11:13:16
+last_reviewed: 2026-05-28 11:13:16
+confidence: 低
+status

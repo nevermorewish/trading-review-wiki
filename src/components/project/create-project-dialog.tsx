@@ -7,11 +7,9 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { FolderOpen } from "lucide-react"
-import { createProject, writeFile, createDirectory } from "@/commands/fs"
-import { getTemplate } from "@/lib/templates"
+import { scaffoldProject } from "@/lib/create-project"
 import { TemplatePicker } from "@/components/project/template-picker"
 import type { WikiProject } from "@/types/wiki"
-import { normalizePath } from "@/lib/path-utils"
 import { useTranslation } from "react-i18next"
 
 interface CreateProjectDialogProps {
@@ -47,21 +45,7 @@ export function CreateProjectDialog({ open: isOpen, onOpenChange, onCreated }: C
     setCreating(true)
     setError("")
     try {
-      const project = await createProject(name.trim(), path.trim())
-      const pp = normalizePath(project.path)
-
-      const template = getTemplate(selectedTemplate)
-      await writeFile(`${pp}/schema.md`, template.schema)
-      await writeFile(`${pp}/purpose.md`, template.purpose)
-      for (const dir of template.extraDirs) {
-        await createDirectory(`${pp}/${dir}`)
-      }
-      // Write template-specific initial files
-      if (template.files) {
-        for (const [relativePath, content] of Object.entries(template.files)) {
-          await writeFile(`${pp}/${relativePath}`, content)
-        }
-      }
+      const project = await scaffoldProject(name.trim(), path.trim(), selectedTemplate)
 
       onCreated(project)
       onOpenChange(false)

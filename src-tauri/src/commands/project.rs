@@ -2,8 +2,46 @@ use std::fs;
 use std::path::Path;
 
 use chrono::Local;
+use tauri::Manager;
 
 use crate::types::wiki::WikiProject;
+
+/// Resolved paths for the bundled default review library.
+/// `review_dir`/`default_dir` live next to the executable (portable layout),
+/// `bundled_wiki_dir` points at the wiki resources packed into the app.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DefaultReviewPaths {
+    pub review_dir: String,
+    pub default_dir: String,
+    pub bundled_wiki_dir: String,
+}
+
+/// Resolve the default review library locations:
+/// - `<exe_dir>/review` and `<exe_dir>/review/default` (data sits beside the exe)
+/// - the bundled `default-wiki` resource directory (synced into target/ in dev)
+#[tauri::command]
+pub fn default_review_paths(app: tauri::AppHandle) -> Result<DefaultReviewPaths, String> {
+    let exe = std::env::current_exe()
+        .map_err(|e| format!("Failed to resolve current exe: {}", e))?;
+    let exe_dir = exe
+        .parent()
+        .ok_or_else(|| "Executable has no parent directory".to_string())?;
+
+    let review_dir = exe_dir.join("review");
+    let default_dir = review_dir.join("default");
+
+    let bundled_wiki = app
+        .path()
+        .resolve("default-wiki", tauri::path::BaseDirectory::Resource)
+        .map_err(|e| format!("Failed to resolve bundled wiki resource: {}", e))?;
+
+    Ok(DefaultReviewPaths {
+        review_dir: review_dir.to_string_lossy().to_string(),
+        default_dir: default_dir.to_string_lossy().to_string(),
+        bundled_wiki_dir: bundled_wiki.to_string_lossy().to_string(),
+    })
+}
 
 #[tauri::command]
 pub fn create_project(name: String, path: String) -> Result<WikiProject, String> {
